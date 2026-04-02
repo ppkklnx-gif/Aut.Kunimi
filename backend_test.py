@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for Kali Pentesting Automation Suite
-Tests all API endpoints and functionality
+Backend API Testing for Red Team Automation Framework v3.0
+Tests all API endpoints with MITRE ATT&CK integration
 """
 
 import requests
@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 BACKEND_URL = "https://security-framework-3.preview.emergentagent.com"
 API_BASE = f"{BACKEND_URL}/api"
 
-class PentestAPITester:
+class RedTeamAPITester:
     def __init__(self):
         self.tests_run = 0
         self.tests_passed = 0
@@ -71,7 +71,7 @@ class PentestAPITester:
             return False, {}
     
     def test_health_check(self) -> bool:
-        """Test API health check"""
+        """Test API health check - should return v3.0.0 and 14 tactics"""
         success, response = self.run_test(
             "API Health Check",
             "GET", 
@@ -81,13 +81,49 @@ class PentestAPITester:
         
         if success and "message" in response:
             self.log(f"API Message: {response['message']}")
+            version = response.get('version', 'unknown')
+            mitre_tactics = response.get('mitre_tactics', 0)
+            self.log(f"Version: {version}")
+            self.log(f"MITRE Tactics: {mitre_tactics}")
+            
+            # Verify v3.0.0 and 14 tactics
+            if version == "3.0.0" and mitre_tactics == 14:
+                self.log("✅ Correct version and MITRE tactics count")
+                return True
+            else:
+                self.log(f"❌ Expected v3.0.0 with 14 tactics, got {version} with {mitre_tactics}")
+                return False
+        return False
+    
+    def test_mitre_tactics(self) -> bool:
+        """Test MITRE ATT&CK tactics endpoint"""
+        success, response = self.run_test(
+            "Get MITRE ATT&CK Tactics",
+            "GET",
+            "mitre/tactics",
+            200
+        )
+        
+        if success and "tactics" in response:
+            tactics = response["tactics"]
+            self.log(f"Found {len(tactics)} MITRE ATT&CK tactics")
+            
+            # Verify key tactics exist
+            expected_tactics = ["reconnaissance", "initial_access", "execution", "persistence", "privilege_escalation"]
+            for tactic in expected_tactics:
+                if tactic in tactics:
+                    tactic_info = tactics[tactic]
+                    self.log(f"  - {tactic_info.get('name', tactic)} ({tactic_info.get('id', 'N/A')})")
+                else:
+                    self.log(f"❌ Missing expected tactic: {tactic}")
+                    return False
             return True
         return False
     
     def test_get_tools(self) -> bool:
-        """Test getting available tools"""
+        """Test getting available tools by phase"""
         success, response = self.run_test(
-            "Get Available Tools",
+            "Get All Tools",
             "GET",
             "tools",
             200
@@ -96,20 +132,71 @@ class PentestAPITester:
         if success and "tools" in response:
             tools = response["tools"]
             self.log(f"Found {len(tools)} tools available")
-            for tool in tools:
-                self.log(f"  - {tool['name']}: {tool['description']}")
-            return True
+            
+            # Test specific phase
+            success2, response2 = self.run_test(
+                "Get Reconnaissance Tools",
+                "GET",
+                "tools?phase=reconnaissance",
+                200
+            )
+            
+            if success2 and "tools" in response2:
+                recon_tools = response2["tools"]
+                self.log(f"Found {len(recon_tools)} reconnaissance tools")
+                for tool_name, tool_info in list(recon_tools.items())[:3]:
+                    self.log(f"  - {tool_name}: {tool_info.get('desc', 'No description')}")
+                return True
+        return False
+    
+    def test_metasploit_modules(self) -> bool:
+        """Test Metasploit modules endpoint"""
+        success, response = self.run_test(
+            "Get Metasploit Modules",
+            "GET",
+            "metasploit/modules",
+            200
+        )
+        
+        if success and "modules" in response:
+            modules = response["modules"]
+            self.log(f"Found {len(modules)} Metasploit modules")
+            
+            # Test filtering by category
+            success2, response2 = self.run_test(
+                "Get Exploit Modules",
+                "GET",
+                "metasploit/modules?category=exploit",
+                200
+            )
+            
+            if success2 and "modules" in response2:
+                exploit_modules = response2["modules"]
+                self.log(f"Found {len(exploit_modules)} exploit modules")
+                
+                # Show some examples
+                for module in exploit_modules[:3]:
+                    self.log(f"  - {module.get('name', 'Unknown')}: {module.get('desc', 'No description')}")
+                
+                # Verify we have 35+ modules total
+                if len(modules) >= 35:
+                    self.log("✅ Has 35+ Metasploit modules as expected")
+                    return True
+                else:
+                    self.log(f"❌ Expected 35+ modules, found {len(modules)}")
+                    return False
         return False
     
     def test_start_scan(self) -> bool:
-        """Test starting a new scan"""
+        """Test starting a new scan with MITRE phases"""
         test_data = {
             "target": "example.com",
-            "scan_types": ["waf", "nmap", "nikto"]
+            "scan_phases": ["reconnaissance", "initial_access"],
+            "tools": []
         }
         
         success, response = self.run_test(
-            "Start New Scan",
+            "Start New Red Team Operation",
             "POST",
             "scan/start",
             200,
@@ -118,9 +205,9 @@ class PentestAPITester:
         
         if success and "scan_id" in response:
             self.scan_id = response["scan_id"]
-            self.log(f"Scan started with ID: {self.scan_id}")
+            self.log(f"Operation started with ID: {self.scan_id}")
             self.log(f"Target: {response.get('target', 'unknown')}")
-            self.log(f"Tools: {response.get('tools', [])}")
+            self.log(f"Phases: {response.get('phases', [])}")
             return True
         return False
     
@@ -131,24 +218,92 @@ class PentestAPITester:
             return False
         
         success, response = self.run_test(
-            "Get Scan Status",
+            "Get Operation Status",
             "GET",
             f"scan/{self.scan_id}/status",
             200
         )
         
         if success:
-            self.log(f"Scan Status: {response.get('status', 'unknown')}")
+            self.log(f"Operation Status: {response.get('status', 'unknown')}")
             self.log(f"Progress: {response.get('progress', 0)}%")
             if response.get('current_tool'):
                 self.log(f"Current Tool: {response['current_tool']}")
             return True
         return False
     
+    def test_attack_tree(self) -> bool:
+        """Test attack tree generation and retrieval"""
+        if not self.scan_id:
+            self.log("No scan ID available for attack tree test", "ERROR")
+            return False
+        
+        success, response = self.run_test(
+            "Get Attack Tree",
+            "GET",
+            f"scan/{self.scan_id}/tree",
+            200
+        )
+        
+        if success:
+            if "root" in response and "nodes" in response:
+                root = response["root"]
+                nodes = response["nodes"]
+                self.log(f"Attack tree retrieved - Root: {root.get('name', 'Unknown')}")
+                self.log(f"Total nodes: {len(nodes)}")
+                
+                # Show some node types
+                node_types = {}
+                for node in nodes.values():
+                    node_type = node.get('type', 'unknown')
+                    node_types[node_type] = node_types.get(node_type, 0) + 1
+                
+                for node_type, count in node_types.items():
+                    self.log(f"  - {node_type}: {count} nodes")
+                
+                return True
+            else:
+                self.log("❌ Invalid attack tree structure")
+                return False
+        return False
+    
+    def test_metasploit_execution(self) -> bool:
+        """Test Metasploit exploit execution"""
+        test_data = {
+            "scan_id": self.scan_id or "",
+            "node_id": "test_node",
+            "module": "exploit/multi/http/apache_mod_cgi_bash_env_exec",
+            "target_host": "example.com",
+            "target_port": 80,
+            "options": {},
+            "lhost": "192.168.1.100",
+            "lport": 4444
+        }
+        
+        success, response = self.run_test(
+            "Execute Metasploit Module",
+            "POST",
+            "metasploit/execute",
+            200,
+            test_data
+        )
+        
+        if success:
+            self.log(f"Module: {response.get('module', 'unknown')}")
+            self.log(f"Target: {response.get('target', 'unknown')}")
+            self.log(f"Success: {response.get('success', False)}")
+            self.log(f"Session Opened: {response.get('session_opened', False)}")
+            
+            if response.get('simulated'):
+                self.log("✅ Simulated execution (expected for testing)")
+            
+            return True
+        return False
+    
     def test_scan_history(self) -> bool:
         """Test getting scan history"""
         success, response = self.run_test(
-            "Get Scan History",
+            "Get Operation History",
             "GET",
             "scan/history",
             200
@@ -156,7 +311,7 @@ class PentestAPITester:
         
         if success:
             if isinstance(response, list):
-                self.log(f"Found {len(response)} scans in history")
+                self.log(f"Found {len(response)} operations in history")
                 for scan in response[:3]:  # Show first 3
                     self.log(f"  - {scan.get('target', 'unknown')} ({scan.get('status', 'unknown')})")
             return True
@@ -169,14 +324,19 @@ class PentestAPITester:
             return False
         
         success, response = self.run_test(
-            "Get Scan Report",
+            "Get Operation Report",
             "GET",
             f"scan/{self.scan_id}/report",
             200
         )
         
         if success and "report" in response:
-            self.log("Scan report retrieved successfully")
+            self.log("Operation report retrieved successfully")
+            report = response["report"]
+            if "ai_analysis" in report:
+                self.log("✅ AI analysis included in report")
+            if "attack_tree" in report:
+                self.log("✅ Attack tree included in report")
             return True
         return False
     
@@ -184,8 +344,9 @@ class PentestAPITester:
         """Test invalid endpoints return proper errors"""
         tests = [
             ("Invalid Scan ID", "GET", "scan/invalid-id/status", 404, None),
-            ("Invalid Tool", "POST", "scan/start", 400, {"target": "", "scan_types": []}),
-            ("Nonexistent Report", "GET", "scan/nonexistent/report", 404, None)
+            ("Invalid Target", "POST", "scan/start", 400, {"target": "", "scan_phases": []}),
+            ("Nonexistent Report", "GET", "scan/nonexistent/report", 404, None),
+            ("Invalid MITRE Tactic", "GET", "mitre/tactics/invalid", 404, None)
         ]
         
         all_passed = True
@@ -225,18 +386,24 @@ class PentestAPITester:
                     
                     # Check AI analysis
                     if response.get('ai_analysis'):
-                        self.log("✅ AI analysis present")
+                        self.log("✅ Kimi K2 AI analysis present")
                         ai_text = response['ai_analysis'][:100] + "..." if len(response['ai_analysis']) > 100 else response['ai_analysis']
                         self.log(f"AI Analysis preview: {ai_text}")
                     else:
                         self.log("⚠️ No AI analysis found")
                     
                     # Check exploit suggestions
-                    exploits = response.get('exploit_suggestions', [])
+                    exploits = response.get('exploits', [])
                     if exploits:
-                        self.log(f"✅ Found {len(exploits)} exploit suggestions")
+                        self.log(f"✅ Found {len(exploits)} exploit recommendations")
                     else:
-                        self.log("⚠️ No exploit suggestions found")
+                        self.log("⚠️ No exploit recommendations found")
+                    
+                    # Check attack tree
+                    if response.get('attack_tree'):
+                        self.log("✅ Attack tree generated")
+                    else:
+                        self.log("⚠️ No attack tree found")
                     
                     return True
                     
@@ -256,41 +423,51 @@ class PentestAPITester:
             return False
         
         success, response = self.run_test(
-            "Delete Scan",
+            "Delete Operation",
             "DELETE",
             f"scan/{self.scan_id}",
             200
         )
         
         if success:
-            self.log("Scan deleted successfully")
+            self.log("Operation deleted successfully")
             return True
         return False
     
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("STARTING KALI PENTEST SUITE BACKEND TESTS")
+        self.log("RED TEAM AUTOMATION FRAMEWORK v3.0 - BACKEND TESTS")
         self.log("=" * 60)
         
         # Basic API tests
         self.log("\n🔍 TESTING BASIC API ENDPOINTS")
         self.test_health_check()
+        
+        # MITRE ATT&CK tests
+        self.log("\n🎯 TESTING MITRE ATT&CK INTEGRATION")
+        self.test_mitre_tactics()
         self.test_get_tools()
+        self.test_metasploit_modules()
         
         # Scan workflow tests
-        self.log("\n🔍 TESTING SCAN WORKFLOW")
+        self.log("\n🔍 TESTING RED TEAM OPERATION WORKFLOW")
         if self.test_start_scan():
             self.test_scan_status()
             
             # Wait for scan completion to test AI integration
-            self.log("\n🤖 TESTING AI INTEGRATION")
+            self.log("\n🤖 TESTING KIMI K2 AI INTEGRATION")
             self.wait_for_scan_completion()
+            
+            # Test attack tree and metasploit
+            self.log("\n🌳 TESTING ATTACK TREE & EXPLOITATION")
+            self.test_attack_tree()
+            self.test_metasploit_execution()
             
             self.test_scan_report()
         
         # History and management
-        self.log("\n🔍 TESTING SCAN MANAGEMENT")
+        self.log("\n🔍 TESTING OPERATION MANAGEMENT")
         self.test_scan_history()
         
         # Error handling
@@ -320,7 +497,7 @@ class PentestAPITester:
 
 def main():
     """Main test runner"""
-    tester = PentestAPITester()
+    tester = RedTeamAPITester()
     return tester.run_all_tests()
 
 if __name__ == "__main__":
