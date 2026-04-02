@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for Red Team Automation Framework v3.0
-Tests all API endpoints with MITRE ATT&CK integration
+Backend API Testing for Red Team Automation Framework v3.1
+Tests all API endpoints with Tactical Decision Engine and MITRE ATT&CK integration
 """
 
 import requests
@@ -71,7 +71,7 @@ class RedTeamAPITester:
             return False, {}
     
     def test_health_check(self) -> bool:
-        """Test API health check - should return v3.0.0 and 14 tactics"""
+        """Test API health check - should return v3.1.0 with tactical_engine features"""
         success, response = self.run_test(
             "API Health Check",
             "GET", 
@@ -82,16 +82,16 @@ class RedTeamAPITester:
         if success and "message" in response:
             self.log(f"API Message: {response['message']}")
             version = response.get('version', 'unknown')
-            mitre_tactics = response.get('mitre_tactics', 0)
+            features = response.get('features', [])
             self.log(f"Version: {version}")
-            self.log(f"MITRE Tactics: {mitre_tactics}")
+            self.log(f"Features: {features}")
             
-            # Verify v3.0.0 and 14 tactics
-            if version == "3.0.0" and mitre_tactics == 14:
-                self.log("✅ Correct version and MITRE tactics count")
+            # Verify v3.1.0 and tactical_engine feature
+            if version == "3.1.0" and "tactical_engine" in features:
+                self.log("✅ Correct version and tactical_engine feature present")
                 return True
             else:
-                self.log(f"❌ Expected v3.0.0 with 14 tactics, got {version} with {mitre_tactics}")
+                self.log(f"❌ Expected v3.1.0 with tactical_engine, got {version} with {features}")
                 return False
         return False
     
@@ -149,7 +149,93 @@ class RedTeamAPITester:
                 return True
         return False
     
-    def test_metasploit_modules(self) -> bool:
+    def test_tactical_waf_bypass(self) -> bool:
+        """Test tactical WAF bypass strategies"""
+        # Test Cloudflare bypass
+        success1, response1 = self.run_test(
+            "Get Cloudflare WAF Bypass Strategy",
+            "GET",
+            "tactical/waf-bypass/cloudflare",
+            200
+        )
+        
+        if success1:
+            self.log(f"Cloudflare bypass techniques: {len(response1.get('techniques', []))}")
+            if response1.get('name') == 'Cloudflare':
+                self.log("✅ Cloudflare strategy found")
+            else:
+                self.log("❌ Invalid Cloudflare strategy")
+                return False
+        else:
+            return False
+        
+        # Test Akamai bypass
+        success2, response2 = self.run_test(
+            "Get Akamai WAF Bypass Strategy",
+            "GET",
+            "tactical/waf-bypass/akamai",
+            200
+        )
+        
+        if success2:
+            self.log(f"Akamai bypass techniques: {len(response2.get('techniques', []))}")
+            if response2.get('name') == 'Akamai':
+                self.log("✅ Akamai strategy found")
+                return True
+            else:
+                self.log("❌ Invalid Akamai strategy")
+                return False
+        return False
+    
+    def test_tactical_service_attacks(self) -> bool:
+        """Test service-specific attack strategies"""
+        success, response = self.run_test(
+            "Get Service Attack Strategies",
+            "GET",
+            "tactical/service-attacks",
+            200
+        )
+        
+        if success and "strategies" in response:
+            strategies = response["strategies"]
+            self.log(f"Found {len(strategies)} service attack strategies")
+            
+            # Check for key services
+            expected_services = ["ssh", "http", "smb", "rdp", "mysql"]
+            for service in expected_services:
+                if service in strategies:
+                    strategy = strategies[service]
+                    self.log(f"  - {service}: {strategy.get('decision', 'No decision')}")
+                else:
+                    self.log(f"❌ Missing strategy for {service}")
+                    return False
+            return True
+        return False
+    
+    def test_tactical_vuln_exploits(self) -> bool:
+        """Test vulnerability to exploit mapping"""
+        success, response = self.run_test(
+            "Get Vulnerability Exploit Mappings",
+            "GET",
+            "tactical/vuln-exploits",
+            200
+        )
+        
+        if success and "mappings" in response:
+            mappings = response["mappings"]
+            self.log(f"Found {len(mappings)} vulnerability exploit mappings")
+            
+            # Check for critical vulnerabilities
+            expected_vulns = ["sql injection", "xss", "lfi", "command injection", "eternalblue"]
+            for vuln in expected_vulns:
+                if vuln in mappings:
+                    mapping = mappings[vuln]
+                    self.log(f"  - {vuln}: {mapping.get('severity', 'unknown')} severity")
+                else:
+                    self.log(f"❌ Missing mapping for {vuln}")
+                    return False
+            return True
+        return False
         """Test Metasploit modules endpoint"""
         success, response = self.run_test(
             "Get Metasploit Modules",
@@ -211,14 +297,14 @@ class RedTeamAPITester:
             return True
         return False
     
-    def test_scan_status(self) -> bool:
-        """Test getting scan status"""
+    def test_scan_status_with_tactical(self) -> bool:
+        """Test getting scan status with tactical decisions"""
         if not self.scan_id:
             self.log("No scan ID available for status test", "ERROR")
             return False
         
         success, response = self.run_test(
-            "Get Operation Status",
+            "Get Operation Status with Tactical Decisions",
             "GET",
             f"scan/{self.scan_id}/status",
             200
@@ -229,9 +315,69 @@ class RedTeamAPITester:
             self.log(f"Progress: {response.get('progress', 0)}%")
             if response.get('current_tool'):
                 self.log(f"Current Tool: {response['current_tool']}")
+            
+            # Check for tactical decisions
+            tactical_decisions = response.get('tactical_decisions', [])
+            if tactical_decisions:
+                self.log(f"✅ Found {len(tactical_decisions)} tactical decisions")
+                for i, decision in enumerate(tactical_decisions[:2]):  # Show first 2
+                    advice = decision.get('advice', {})
+                    self.log(f"  Decision {i+1}: {advice.get('overall_strategy', 'No strategy')[:50]}...")
+            else:
+                self.log("⚠️ No tactical decisions found yet")
+            
+            # Check for final tactical analysis
+            final_tactical = response.get('final_tactical')
+            if final_tactical:
+                self.log("✅ Final tactical analysis present")
+                waf_analysis = final_tactical.get('waf_analysis')
+                if waf_analysis:
+                    self.log(f"  WAF detected: {waf_analysis.get('waf_detected', False)}")
+                port_decisions = final_tactical.get('port_decisions', [])
+                if port_decisions:
+                    self.log(f"  Port decisions: {len(port_decisions)}")
+            
             return True
         return False
     
+    def test_metasploit_modules(self) -> bool:
+        """Test Metasploit modules endpoint"""
+        success, response = self.run_test(
+            "Get Metasploit Modules",
+            "GET",
+            "metasploit/modules",
+            200
+        )
+        
+        if success and "modules" in response:
+            modules = response["modules"]
+            self.log(f"Found {len(modules)} Metasploit modules")
+            
+            # Test filtering by category
+            success2, response2 = self.run_test(
+                "Get Exploit Modules",
+                "GET",
+                "metasploit/modules?category=exploit",
+                200
+            )
+            
+            if success2 and "modules" in response2:
+                exploit_modules = response2["modules"]
+                self.log(f"Found {len(exploit_modules)} exploit modules")
+                
+                # Show some examples
+                for module in exploit_modules[:3]:
+                    self.log(f"  - {module.get('name', 'Unknown')}: {module.get('desc', 'No description')}")
+                
+                # Verify we have modules
+                if len(modules) >= 5:
+                    self.log("✅ Has sufficient Metasploit modules")
+                    return True
+                else:
+                    self.log(f"❌ Expected 5+ modules, found {len(modules)}")
+                    return False
+        return False
+
     def test_attack_tree(self) -> bool:
         """Test attack tree generation and retrieval"""
         if not self.scan_id:
@@ -437,7 +583,7 @@ class RedTeamAPITester:
     def run_all_tests(self):
         """Run all backend tests"""
         self.log("=" * 60)
-        self.log("RED TEAM AUTOMATION FRAMEWORK v3.0 - BACKEND TESTS")
+        self.log("RED TEAM AUTOMATION FRAMEWORK v3.1 - BACKEND TESTS")
         self.log("=" * 60)
         
         # Basic API tests
@@ -448,12 +594,21 @@ class RedTeamAPITester:
         self.log("\n🎯 TESTING MITRE ATT&CK INTEGRATION")
         self.test_mitre_tactics()
         self.test_get_tools()
+        
+        # NEW: Tactical Decision Engine tests
+        self.log("\n🧠 TESTING TACTICAL DECISION ENGINE v3.1")
+        self.test_tactical_waf_bypass()
+        self.test_tactical_service_attacks()
+        self.test_tactical_vuln_exploits()
+        
+        # Metasploit tests
+        self.log("\n💀 TESTING METASPLOIT INTEGRATION")
         self.test_metasploit_modules()
         
         # Scan workflow tests
         self.log("\n🔍 TESTING RED TEAM OPERATION WORKFLOW")
         if self.test_start_scan():
-            self.test_scan_status()
+            self.test_scan_status_with_tactical()
             
             # Wait for scan completion to test AI integration
             self.log("\n🤖 TESTING KIMI K2 AI INTEGRATION")

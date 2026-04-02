@@ -43,7 +43,7 @@ const ASCII_LOGO = `
  ██╔══██╗██╔══╝  ██║  ██║       ██║   ██╔══╝  ██╔══██║██║╚██╔╝██║
  ██║  ██║███████╗██████╔╝       ██║   ███████╗██║  ██║██║ ╚═╝ ██║
  ╚═╝  ╚═╝╚══════╝╚═════╝        ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝
-              AUTOMATION FRAMEWORK v3.0 | MITRE ATT&CK`;
+       TACTICAL ENGINE v3.1 | ADAPTIVE ATTACK PLANNING`;
 
 function App() {
   const [target, setTarget] = useState("");
@@ -53,6 +53,7 @@ function App() {
   const [scanStatus, setScanStatus] = useState(null);
   const [attackTree, setAttackTree] = useState(null);
   const [mitreTactics, setMitreTactics] = useState({});
+  const [tacticalDecisions, setTacticalDecisions] = useState([]);
   const [terminalLines, setTerminalLines] = useState([
     { type: "system", text: "RED TEAM AUTOMATION FRAMEWORK v3.0" },
     { type: "system", text: "MITRE ATT&CK Integration Enabled" },
@@ -134,6 +135,24 @@ function App() {
       setScanStatus(response.data);
       if (response.data.current_tool) addTerminalLine("info", `[${response.data.progress}%] ${response.data.current_tool.toUpperCase()}`);
       if (response.data.attack_tree) setAttackTree(response.data.attack_tree);
+      
+      // Show tactical decisions in real-time
+      if (response.data.tactical_decisions && response.data.tactical_decisions.length > 0) {
+        const latestTactical = response.data.tactical_decisions[response.data.tactical_decisions.length - 1];
+        if (latestTactical?.advice?.overall_strategy) {
+          addTerminalLine("warning", `[TACTICAL] ${latestTactical.advice.overall_strategy}`);
+        }
+        // Show WAF detection alert
+        if (latestTactical?.advice?.waf_analysis?.waf_detected) {
+          addTerminalLine("error", `[!] WAF DETECTED: ${latestTactical.advice.waf_analysis.waf_name}`);
+          addTerminalLine("info", `[>] Bypass strategy: ${latestTactical.advice.waf_analysis.alternative_approach}`);
+        }
+        // Show priority actions
+        latestTactical?.advice?.priority_actions?.forEach(action => {
+          addTerminalLine("warning", `[P${action.priority}] ${action.action}: ${action.details}`);
+        });
+        setTacticalDecisions(response.data.tactical_decisions);
+      }
       if (response.data.status === "completed") {
         clearInterval(pollIntervalRef.current);
         setIsScanning(false);
