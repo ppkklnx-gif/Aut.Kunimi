@@ -251,3 +251,70 @@
   text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
   white-space: pre;
 }
+
+/* Attack Tree Styles */
+.attack-tree {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.tree-node {
+  position: relative;
+}
+
+.tree-node::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0, 255, 65, 0.2);
+}
+
+.tree-children {
+  position: relative;
+}
+
+.tree-children::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 0;
+  height: 100%;
+  width: 1px;
+  background: rgba(0, 255, 65, 0.15);
+}
+
+/* Line Clamp */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Metasploit Styles */
+.msf-console {
+  background: #0a0a0a;
+  border: 1px solid rgba(255, 0, 60, 0.5);
+}
+
+/* Node pulse animation for active testing */
+@keyframes node-pulse {
+  0%, 100% { box-shadow: 0 0 5px rgba(255, 176, 0, 0.5); }
+  50% { box-shadow: 0 0 20px rgba(255, 176, 0, 0.8); }
+}
+
+.node-testing {
+  animation: node-pulse 1.5s ease-in-out infinite;
+}
+
+/* Success glow */
+@keyframes success-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 65, 0.5); }
+  50% { box-shadow: 0 0 15px rgba(0, 255, 65, 0.8); }
+}
+
+.node-success {
+  animation: success-glow 2s ease-in-out infinite;
+}
