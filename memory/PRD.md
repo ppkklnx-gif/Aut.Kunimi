@@ -1,53 +1,64 @@
-# Kali Pentesting Automation Suite - PRD
+# Kali Pentesting Automation Suite v2.0 - PRD
 
 ## Original Problem Statement
-Crear una herramienta web para Kali Linux que automatice pentesting con flujo: Target → WAF Detection → Nmap → Sn1per → Kimi AI Analysis → Metasploit suggestions. Interfaz Matrix/Cyberpunk.
+Herramienta web de pentesting automatizado para Kali Linux con:
+- Flujo: Target → WAF → Nmap → Nikto → IA Kimi K2 → Metasploit
+- Mapa/diagrama de auditoría visual con ramas para cada vulnerabilidad
+- Integración Metasploit para validar y explotar vulnerabilidades
+- Interfaz Matrix/Cyberpunk
 
 ## Architecture
-- **Frontend**: React + TailwindCSS con estilo Matrix/Cyberpunk
+- **Frontend**: React + TailwindCSS (Matrix theme)
 - **Backend**: FastAPI + MongoDB
 - **AI**: Kimi K2 (Moonshot AI) para análisis de vulnerabilidades
 - **Tools**: wafw00f, nmap, nikto, whatweb, subfinder, sn1per (simulados)
-
-## User Personas
-1. **Pentester profesional**: Automatiza flujos de reconocimiento
-2. **Estudiante de ciberseguridad**: Aprende con flujos guiados por IA
-
-## Core Requirements
-- [x] Input de target (IP/URL)
-- [x] Selección de herramientas de pentesting
-- [x] Escaneo automatizado secuencial
-- [x] Análisis de IA con Kimi K2
-- [x] Sugerencias de Metasploit/SQLmap
-- [x] Historial de escaneos
-- [x] Exportación de reportes JSON
-- [x] Interfaz Matrix/Cyberpunk
+- **Exploitation**: Metasploit Framework (simulado con comandos RC válidos)
 
 ## What's Been Implemented (Jan 2026)
-- Full-stack pentesting automation suite
-- 6 herramientas: WAF, Nmap, Nikto, WhatWeb, Subfinder, Sn1per
-- Integración Kimi K2 para análisis de vulnerabilidades
-- Terminal output con ASCII art
-- Tabs: Herramientas, KIMI AI, Historial
-- MongoDB para persistencia
-- Background tasks para escaneos
+
+### Core Features
+- [x] Input de target (IP/URL)
+- [x] 6 herramientas de pentesting seleccionables
+- [x] Escaneo automatizado en background
+- [x] Análisis IA con Kimi K2
+- [x] **NUEVO: Mapa de auditoría visual (Attack Tree)**
+  - Nodos para servicios, vulnerabilidades, exploits
+  - Estados: pending, testing, verified, success, failed
+  - Interacción para marcar progreso
+- [x] **NUEVO: Consola Metasploit integrada**
+  - 17 módulos de exploits/auxiliary
+  - Búsqueda de módulos
+  - Ejecución con comandos RC
+- [x] Historial de escaneos con MongoDB
+- [x] Exportación de reportes JSON
+- [x] Interfaz Matrix/Cyberpunk completa
+
+### API Endpoints
+- POST /api/scan/start - Iniciar escaneo
+- GET /api/scan/{id}/status - Estado + árbol de ataque
+- GET /api/scan/{id}/tree - Árbol de ataque completo
+- PUT /api/scan/{id}/tree/node/{id} - Actualizar estado de nodo
+- POST /api/metasploit/execute - Ejecutar exploit
+- GET /api/metasploit/modules - Buscar módulos MSF
 
 ## Prioritized Backlog
-### P0 (Critical)
+### P0 - Completado
 - ✅ Core scanning workflow
 - ✅ AI analysis integration
+- ✅ Attack tree visualization
+- ✅ Metasploit integration
 
 ### P1 (High)
 - [ ] Instalar herramientas reales en Kali Linux
+- [ ] Conexión real con msfrpcd
 - [ ] Exportar reportes en PDF
-- [ ] Notificaciones en tiempo real (WebSocket)
 
 ### P2 (Medium)
-- [ ] Integración con Metasploit RPC
-- [ ] SQLmap automation
+- [ ] SQLmap automation avanzada
+- [ ] Notificaciones WebSocket tiempo real
 - [ ] Dashboard de métricas
 
 ## Next Tasks
-1. Probar en entorno Kali Linux real con herramientas instaladas
-2. Agregar más parsers de output para cada herramienta
-3. Implementar exportación PDF
+1. Desplegar en Kali Linux real con herramientas instaladas
+2. Configurar msfrpcd para ejecución real de Metasploit
+3. Agregar más módulos de Metasploit
