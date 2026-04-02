@@ -25,7 +25,7 @@ db = client[os.environ['DB_NAME']]
 
 # Kimi API configuration
 KIMI_API_KEY = os.environ.get('KIMI_API_KEY', '')
-KIMI_API_URL = "https://api.moonshot.cn/v1/chat/completions"
+KIMI_API_URL = "https://api.moonshot.ai/v1/chat/completions"
 
 # Create the main app
 app = FastAPI(title="Kali Pentesting Automation Suite")
