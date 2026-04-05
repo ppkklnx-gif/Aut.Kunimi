@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # ─── MongoDB ───────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: redteam-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: mongosh --eval "db.runCommand({ping:1})" --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - redteam
+
+  # ─── Backend (FastAPI) ─────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: redteam-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=redteam_framework
+    ports:
+      - "${BACKEND_PORT:-8001}:8001"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - sliver_configs:/configs:ro
+    networks:
+      - redteam
+
+  # ─── Frontend (React + Nginx) ──────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_BACKEND_URL=
+    container_name: redteam-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+    networks:
+      - redteam
+
+volumes:
+  mongo_data:
+    driver: local
+  sliver_configs:
+    driver: local
+
+networks:
+  redteam:
+    driver: bridge

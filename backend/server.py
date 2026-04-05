@@ -19,11 +19,11 @@ import asyncio
 from fpdf import FPDF
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / '.env')  # Local dev; Docker uses env_file from compose
 
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'redteam_framework')]
 
 KIMI_API_KEY = os.environ.get('KIMI_API_KEY', '')
 KIMI_API_URL = "https://api.moonshot.ai/v1/chat/completions"
@@ -1108,12 +1108,27 @@ global_config: Dict[str, Any] = {
 }
 
 async def load_global_config():
-    """Load global config from DB on startup"""
+    """Load global config from DB on startup, seed from env vars if empty"""
     global global_config
     doc = await db.global_config.find_one({"_id": "operator_config"})
     if doc:
         doc.pop("_id", None)
         global_config.update(doc)
+
+    # Seed from env vars if not yet configured in DB
+    env_ip = os.environ.get("LISTENER_IP", "")
+    env_port = os.environ.get("LISTENER_PORT", "")
+    changed = False
+    if env_ip and not global_config.get("listener_ip"):
+        global_config["listener_ip"] = env_ip
+        changed = True
+    if env_port and not global_config.get("listener_port"):
+        global_config["listener_port"] = int(env_port)
+        changed = True
+    if changed:
+        await db.global_config.update_one(
+            {"_id": "operator_config"}, {"$set": global_config}, upsert=True
+        )
 
 def get_effective_lhost() -> str:
     """Get the effective LHOST from global config"""
@@ -1442,7 +1457,42 @@ def get_recommended_modules(results: Dict, tactical: Dict) -> List[Dict]:
 # =============================================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Red Team Automation Framework", "version": "5.0.0", "features": ["tactical_engine", "adaptive_planning", "waf_bypass", "global_config"]}
+    return {"message": "Red Team Automation Framework", "version": "5.0.0", "features": ["tactical_engine", "adaptive_planning", "waf_bypass", "global_config", "docker"]}
+
+@api_router.get("/health")
+async def health():
+    """Health check with connectivity diagnostics"""
+    checks = {}
+    # MongoDB
+    try:
+        await db.command("ping")
+        checks["mongodb"] = {"status": "connected", "url": mongo_url.split("@")[-1] if "@" in mongo_url else mongo_url}
+    except Exception as e:
+        checks["mongodb"] = {"status": "error", "error": str(e)}
+
+    # MSF RPC
+    checks["msf_rpc"] = {
+        "host": MSF_RPC_HOST,
+        "port": MSF_RPC_PORT,
+        "token_set": bool(MSF_RPC_TOKEN),
+        "connected": msf_module.is_connected()
+    }
+
+    # Sliver
+    checks["sliver"] = {
+        "config_path": SLIVER_CONFIG_PATH,
+        "connected": sliver_module.is_connected()
+    }
+
+    # Global config
+    checks["listener"] = {
+        "ip": global_config.get("listener_ip", ""),
+        "port": global_config.get("listener_port", 4444),
+        "configured": bool(global_config.get("listener_ip"))
+    }
+
+    all_ok = checks["mongodb"]["status"] == "connected"
+    return {"status": "healthy" if all_ok else "degraded", "checks": checks}
 
 # ============ GLOBAL CONFIG ENDPOINTS ============
 
