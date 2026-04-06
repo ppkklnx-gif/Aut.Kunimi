@@ -1,29 +1,38 @@
-# Red Team Automation Framework v5.0
+# Red Team Automation Framework v6.0
 
-Plataforma de automatización Red Team con orquestación adaptativa, C2 (Metasploit + Sliver), generador de payloads, y análisis AI.
+Plataforma de automatización Red Team con arquitectura **Local-First**: SQLite, sistema de Jobs async, orquestación adaptativa, C2 (Metasploit + Sliver), generador de payloads, y análisis AI.
 
-## Instalación
+## Instalación (Kali Linux)
 
 ```bash
 git clone https://github.com/TU_USUARIO/TU_REPO.git
 cd TU_REPO
-cp .env.docker backend/.env
-nano backend/.env       # Configura tus keys
-./start.sh
+chmod +x install.sh run.sh stop.sh doctor.sh
+./install.sh
+nano backend/.env       # Configura tus keys (KIMI_API_KEY, MSF_RPC_TOKEN, LISTENER_IP)
+./run.sh
 ```
 
 Abrir: `http://localhost:3000`
 
-Documentación completa: **[DOCKER_DEPLOY.md](DOCKER_DEPLOY.md)**
+## Scripts
+
+| Script | Función |
+|---|---|
+| `./install.sh` | Instala .venv, dependencias, crea directorios |
+| `./run.sh` | Arranca backend + frontend |
+| `./stop.sh` | Para todo limpiamente (sin orphans) |
+| `./doctor.sh` | Diagnóstico profundo del sistema |
 
 ## Arquitectura
 
-| Componente | Dónde corre | Tecnología |
-|---|---|---|
-| Frontend | Docker | React, Nginx |
-| MongoDB | Docker | Mongo 7 |
-| Backend | Kali host | FastAPI, Python |
-| MSF RPC | Kali host | msfrpcd |
-| Sliver C2 | Kali host | sliver-server |
-| Herramientas | Kali host | nmap, nikto, gobuster |
-| AI | API externa | Moonshot/Kimi K2 |
+| Componente | Tecnología |
+|---|---|
+| Frontend | React 19, TailwindCSS |
+| Backend | FastAPI, Python, SQLite |
+| Database | SQLite (local, sin Docker) |
+| Job System | Async jobs con polling |
+| MSF RPC | msfrpcd (opcional) |
+| Sliver C2 | sliver-server (opcional) |
+| Herramientas | nmap, nikto, sqlmap, hydra, gobuster |
+| AI | Moonshot/Kimi K2 (opcional) |
