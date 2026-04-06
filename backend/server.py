@@ -565,8 +565,19 @@ async def run_tool(tool_id: str, target: str) -> Dict[str, Any]:
         return {"error": f"Unknown tool: {tool_id}"}
     try:
         cmd = tool["cmd"].format(target=target)
-        result = subprocess.run(cmd.split(), capture_output=True, text=True, timeout=300)
-        output = result.stdout + result.stderr
+        # Use async subprocess to avoid blocking the event loop
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"error": f"{tool_id} timed out (300s)", "tool": tool_id}
+        output = (stdout.decode(errors='replace') if stdout else '') + (stderr.decode(errors='replace') if stderr else '')
         if tool_id == "nmap":
             return parse_nmap_output(output)
         elif tool_id == "wafw00f":
@@ -594,9 +605,26 @@ async def run_metasploit(module: str, target: str, port: Optional[int], options:
         rc_file = f"/tmp/msf_{uuid.uuid4().hex[:8]}.rc"
         with open(rc_file, 'w') as f:
             f.write(rc_content)
-        result = subprocess.run(["msfconsole", "-q", "-r", rc_file], capture_output=True, text=True, timeout=300)
-        os.remove(rc_file)
-        output = result.stdout + result.stderr
+        proc = await asyncio.create_subprocess_exec(
+            "msfconsole", "-q", "-r", rc_file,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            try:
+                os.remove(rc_file)
+            except OSError:
+                pass
+            return {"module": module, "success": False, "error": "Timeout (300s)", "rc_command": rc_content}
+        try:
+            os.remove(rc_file)
+        except OSError:
+            pass
+        output = (stdout.decode(errors='replace') if stdout else '') + (stderr.decode(errors='replace') if stderr else '')
         success = "session" in output.lower() and "opened" in output.lower()
         return {"module": module, "success": success, "session_opened": success, "output": output, "rc_command": rc_content}
     except FileNotFoundError:
@@ -1121,8 +1149,9 @@ async def doctor():
     tool_checks = {}
     for tool_name in ["nmap", "nikto", "sqlmap", "hydra", "msfvenom"]:
         try:
-            subprocess.run(["which", tool_name], capture_output=True, timeout=5)
-            tool_checks[tool_name] = True
+            proc = await asyncio.create_subprocess_exec("which", tool_name, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await asyncio.wait_for(proc.communicate(), timeout=3)
+            tool_checks[tool_name] = proc.returncode == 0
         except Exception:
             tool_checks[tool_name] = False
     diag["tools"] = tool_checks
@@ -1467,15 +1496,29 @@ async def generate_payload(data: Dict[str, Any]):
     if template["type"] in ("staged", "stageless"):
         try:
             output_path = f"/tmp/{output_name}"
-            gen_result = subprocess.run(generator_cmd.split(), capture_output=True, text=True, timeout=120)
-            if gen_result.returncode == 0 and os.path.exists(output_path):
+            proc = await asyncio.create_subprocess_shell(
+                generator_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                result["generated"] = False
+                result["error"] = "Generation timed out (120s)"
+                result["execution_method"] = f"Run manually: {generator_cmd}"
+                return result
+            if proc.returncode == 0 and os.path.exists(output_path):
                 result["generated"] = True
                 result["file_path"] = output_path
                 result["file_size"] = os.path.getsize(output_path)
                 result["execution_method"] = f"Transfer {output_name} to target. Start handler: {handler_cmd}"
             else:
                 result["generated"] = False
-                result["error"] = gen_result.stderr[:300] if gen_result.stderr else "Generation failed"
+                stderr_text = stderr.decode(errors='replace') if stderr else ""
+                result["error"] = stderr_text[:300] if stderr_text else "Generation failed"
                 result["execution_method"] = f"Run manually: {generator_cmd}"
         except FileNotFoundError:
             result["generated"] = False
