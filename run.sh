@@ -55,8 +55,12 @@ kill_port 3000
 # ─── Start Backend ───────────────────────────────────────
 info "Starting backend (FastAPI on :8001)..."
 source "$VENV_DIR/bin/activate"
+
+# Ensure data directory exists
+mkdir -p "$BACKEND_DIR/data"
+
 cd "$BACKEND_DIR"
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload \
+"$VENV_DIR/bin/uvicorn" server:app --host 0.0.0.0 --port 8001 --reload \
     > "$LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "$BACKEND_PID" > "$PID_DIR/backend.pid"

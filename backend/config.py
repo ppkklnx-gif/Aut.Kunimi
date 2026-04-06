@@ -107,14 +107,18 @@ class Config:
 def load_config() -> Config:
     """Load config from environment variables."""
     data_dir = BACKEND_DIR / "data"
-    data_dir.mkdir(exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    default_db = str(data_dir / "redteam.db")
+
+    raw_db_path = os.environ.get("DB_PATH", "").strip()
+    db_path = raw_db_path if raw_db_path else default_db
 
     cfg = Config(
         app_mode=os.environ.get("APP_MODE", "local"),
         backend_port=int(os.environ.get("BACKEND_PORT", "8001")),
         frontend_port=int(os.environ.get("FRONTEND_PORT", "3000")),
         cors_origins=os.environ.get("CORS_ORIGINS", "*"),
-        db_path=os.environ.get("DB_PATH", str(data_dir / "redteam.db")),
+        db_path=db_path,
         listener_ip=os.environ.get("LISTENER_IP", ""),
         listener_port=int(os.environ.get("LISTENER_PORT", "4444")),
         msf_rpc_host=os.environ.get("MSF_RPC_HOST", "127.0.0.1"),

@@ -77,7 +77,7 @@ MSF_RPC_TOKEN=""
 MSF_RPC_HOST="127.0.0.1"
 MSF_RPC_PORT="55553"
 SLIVER_CONFIG_PATH=""
-DB_PATH="/app/backend/data/redteam.db"
+DB_PATH=""
 APP_MODE="local"
 LOG_LEVEL="INFO"
 ENVEOF

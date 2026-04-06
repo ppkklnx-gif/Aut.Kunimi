@@ -122,7 +122,12 @@ fi
 # ─── 4. Database ─────────────────────────────────────────
 echo ""
 echo -e "${CYAN}[4/7] Database (SQLite)${NC}"
-DB_FILE="${DB_PATH:-$DATA_DIR/redteam.db}"
+# Use DB_PATH from .env, or default to backend/data/redteam.db relative to project
+if [ -n "${DB_PATH:-}" ] && [ "${DB_PATH}" != '""' ] && [ "${DB_PATH}" != "" ]; then
+    DB_FILE="$DB_PATH"
+else
+    DB_FILE="$DATA_DIR/redteam.db"
+fi
 if [ -d "$(dirname "$DB_FILE")" ]; then
     pass "Data directory exists: $(dirname "$DB_FILE")"
 else
